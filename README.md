@@ -19,6 +19,7 @@ fails the build if anyone adds one.
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [Install](#install)
 - [The three tools](#the-three-tools)
 - [Architecture](#architecture)
@@ -31,6 +32,50 @@ fails the build if anyone adds one.
 - [Local development](#local-development)
 - [Security checks](#security-checks)
 - [Using it from an MCP client](#using-it-from-an-mcp-client)
+
+## Quick start
+
+The fastest path is to grab the prebuilt binary for your platform, then point an
+MCP client at it. This needs the [GitHub CLI](https://cli.github.com), which
+detects your platform and downloads the latest release.
+
+```bash
+# 1. Download the binary for this machine and unpack it.
+os=$(uname -s | tr '[:upper:]' '[:lower:]')            # linux or darwin
+arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+gh release download --repo matheus3301/mcp-slack --pattern "mcp-slack_*_${os}_${arch}.tar.gz"
+tar -xzf mcp-slack_*_"${os}"_"${arch}".tar.gz
+
+# 2. Move it onto your PATH and confirm it runs.
+sudo install mcp-slack /usr/local/bin/mcp-slack
+mcp-slack --version
+```
+
+Windows users download `mcp-slack_<version>_windows_amd64.zip` from the
+[releases page](https://github.com/matheus3301/mcp-slack/releases) and unzip it.
+No CLI needed. To verify the download and its provenance first, see
+[Install](#install).
+
+Create a Slack app, give its bot token the four read scopes, install it, and
+invite the bot to each channel you want to read. The steps are in
+[Slack app: scopes and bot membership](#slack-app-scopes-and-bot-membership).
+
+Then register the server with your MCP client. The token comes from the
+environment; the allowlist is a separate value:
+
+```yaml
+mcp_servers:
+  slack:
+    command: /usr/local/bin/mcp-slack
+    transport: stdio
+    env:
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_READ_ALLOWED_CHANNELS: "C0123456789,C0987654321"
+```
+
+Restart the client. It launches `mcp-slack` over stdio, and the three tools
+appear. To prove the server works on its own before wiring a client, run the
+[stdio smoke test](#running-locally).
 
 ## Install
 
