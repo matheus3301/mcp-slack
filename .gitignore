@@ -1,0 +1,27 @@
+# Compiled binaries / build output
+/mcp-slack
+/dist/
+/build/
+*.exe
+*.test
+*.out
+
+# Local tool installs (staticcheck/gosec/govulncheck installed into .tools)
+/.tools/
+
+# Coverage / profiling
+coverage.txt
+coverage.html
+*.cover
+*.prof
+
+# Secrets and local env — never commit these
+.env
+.env.*
+*.env
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
