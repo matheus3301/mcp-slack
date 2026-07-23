@@ -14,21 +14,47 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/matheus3301/mcp-slack/internal/buildinfo"
 	"github.com/matheus3301/mcp-slack/internal/config"
 	"github.com/matheus3301/mcp-slack/internal/mcpserver"
 	"github.com/matheus3301/mcp-slack/internal/slackclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// version is overridden at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// These are overridden at build time via
+// -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
+func buildInfo() buildinfo.Info {
+	return buildinfo.Info{Version: version, Commit: commit, Date: date}
+}
 
 func main() {
+	// Handle --version before touching config so it works with no environment.
+	if versionRequested(os.Args[1:]) {
+		fmt.Fprintln(os.Stdout, buildInfo().String())
+		return
+	}
 	if err := run(); err != nil {
 		// Errors are already sanitized; they never contain the token.
 		fmt.Fprintln(os.Stderr, "mcp-slack: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// versionRequested reports whether the args ask for the version banner.
+func versionRequested(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--version", "-version", "version", "-v":
+			return true
+		}
+	}
+	return false
 }
 
 func run() error {

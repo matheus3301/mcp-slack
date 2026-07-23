@@ -14,7 +14,7 @@ GOOS   ?= linux
 GOARCH ?= amd64
 
 .PHONY: all check fmt fmt-check vet staticcheck lint test test-race \
-        govulncheck gosec security build tidy clean tools
+        govulncheck gosec security build dist verify-dist tidy clean tools
 
 all: check
 
@@ -63,6 +63,17 @@ security: govulncheck gosec
 build:
 	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
 		$(GO) build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o dist/mcp-slack ./cmd/mcp-slack
+
+## dist: build all release archives + SHA256SUMS into dist/ (mirrors CI)
+dist:
+	VERSION=$(VERSION) COMMIT=$$(git rev-parse HEAD 2>/dev/null) \
+		DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+		GO=$(GO) ./scripts/package.sh dist
+
+## verify-dist: check every archive against dist/SHA256SUMS
+verify-dist:
+	@cd dist && (command -v sha256sum >/dev/null 2>&1 && sha256sum -c SHA256SUMS \
+		|| shasum -a 256 -c SHA256SUMS)
 
 ## tidy: sync go.mod/go.sum
 tidy:

@@ -19,6 +19,7 @@ fails the build if anyone adds one.
 
 ## Contents
 
+- [Install](#install)
 - [The three tools](#the-three-tools)
 - [Architecture](#architecture)
 - [Threat model](#threat-model)
@@ -30,6 +31,49 @@ fails the build if anyone adds one.
 - [Local development](#local-development)
 - [Security checks](#security-checks)
 - [Using it from an MCP client](#using-it-from-an-mcp-client)
+
+## Install
+
+Two supported paths. Pick one.
+
+### Prebuilt binary
+
+Each tagged release ships statically linked binaries for the platforms below.
+Every archive holds the binary, `LICENSE`, and `README.md`. A `SHA256SUMS` file
+covers all archives, and each archive carries a signed build-provenance
+attestation.
+
+| Platform | Asset |
+| --- | --- |
+| Linux amd64 | `mcp-slack_<version>_linux_amd64.tar.gz` |
+| Linux arm64 | `mcp-slack_<version>_linux_arm64.tar.gz` |
+| macOS amd64 | `mcp-slack_<version>_darwin_amd64.tar.gz` |
+| macOS arm64 | `mcp-slack_<version>_darwin_arm64.tar.gz` |
+| Windows amd64 | `mcp-slack_<version>_windows_amd64.zip` |
+
+Download the archive for your platform along with `SHA256SUMS`, then check the
+hash and the provenance before you trust the binary:
+
+```bash
+# Integrity: the archive matches the published checksum.
+sha256sum -c SHA256SUMS --ignore-missing
+
+# Provenance: GitHub built this archive from this repository.
+gh attestation verify mcp-slack_<version>_linux_amd64.tar.gz \
+  --repo matheus3301/mcp-slack
+
+tar -xzf mcp-slack_<version>_linux_amd64.tar.gz
+./mcp-slack --version
+```
+
+### From source
+
+```bash
+go install github.com/matheus3301/mcp-slack/cmd/mcp-slack@v0.1.0
+```
+
+Either way, `mcp-slack --version` prints the version, commit, build date, and Go
+toolchain.
 
 ## The three tools
 

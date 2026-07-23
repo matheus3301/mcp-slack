@@ -1,0 +1,123 @@
+name: release
+
+# Publish prebuilt binaries only for semantic version tags (v1.2.3).
+on:
+  push:
+    tags:
+      - "v*"
+
+# Default to read-only; each job widens only what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A bad build must never reach a release. This job gates the release job.
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      STATICCHECK_VERSION: v0.7.0
+      GOVULNCHECK_VERSION: v1.6.0
+      GOSEC_VERSION: v2.28.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject non-semver tags
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$'; then
+            echo "tag '$tag' is not a semantic version (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Verify formatting
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed on:"; echo "$out"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
+
+      - name: gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION} -exclude-dir=.tools ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+
+  release:
+    name: build & publish
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release and upload assets
+      id-token: write # sign the provenance attestation via OIDC
+      attestations: write # record the provenance attestation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build archives and checksums
+        env:
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            bash scripts/package.sh dist
+          echo "--- SHA256SUMS ---"
+          cat dist/SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            printf 'Prebuilt, statically linked binaries for linux (amd64, arm64), darwin (amd64, arm64), and windows (amd64).\n\n'
+            printf 'Verify a download:\n\n'
+            printf '    sha256sum -c SHA256SUMS --ignore-missing\n\n'
+            printf 'Verify build provenance with the GitHub CLI:\n\n'
+            printf '    gh attestation verify <archive> --repo %s\n\n' "$GITHUB_REPOSITORY"
+            printf 'Or install from source:\n\n'
+            printf '    go install github.com/matheus3301/mcp-slack/cmd/mcp-slack@%s\n' "$TAG"
+          } > release-notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS
