@@ -50,6 +50,19 @@ type Page struct {
 	NextCursor string    `json:"next_cursor,omitempty"`
 }
 
+// ChannelPage is a page of channel metadata returned when listing the
+// channels the bot belongs to (wildcard mode).
+type ChannelPage struct {
+	Channels   []ChannelMeta `json:"channels"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+// ListParams are the validated arguments for listing member channels.
+type ListParams struct {
+	Limit  int
+	Cursor string
+}
+
 // HistoryParams are the validated arguments for a conversations.history read.
 type HistoryParams struct {
 	ChannelID string
@@ -74,8 +87,12 @@ type RepliesParams struct {
 // API is the read-only Slack surface consumed by the MCP tools. Depending on an
 // interface rather than *slack.Client lets the tools be unit-tested against a
 // fake with no network and no credentials.
+//
+// MemberChannels is backed by users.conversations, which returns only channels
+// the bot belongs to. It never enumerates the whole workspace.
 type API interface {
 	ConversationInfo(ctx context.Context, channelID string) (*ChannelMeta, error)
 	ConversationHistory(ctx context.Context, p HistoryParams) (*Page, error)
 	ConversationReplies(ctx context.Context, p RepliesParams) (*Page, error)
+	MemberChannels(ctx context.Context, p ListParams) (*ChannelPage, error)
 }

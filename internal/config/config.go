@@ -85,20 +85,43 @@ func validateToken(token string) error {
 	return nil
 }
 
-// parseAllowlist parses the comma-separated channel-ID allowlist. It requires
-// at least one entry and rejects anything that is not a channel/group ID.
+// wildcardToken, alone, opts into wildcard mode: any public or private channel
+// the bot is currently a member of. It must not be combined with explicit IDs.
+const wildcardToken = "*"
+
+// parseAllowlist parses the comma-separated channel-ID allowlist. An empty or
+// missing value is a fatal error. A single "*" enables wildcard (member-scoped)
+// mode. "*" mixed with IDs is invalid. Otherwise every entry must be a channel
+// or private-group ID.
 func parseAllowlist(raw string) (Allowlist, error) {
 	if strings.TrimSpace(raw) == "" {
-		return Allowlist{}, fmt.Errorf("%s is required and must list at least one channel ID", EnvAllowedChannels)
+		return Allowlist{}, fmt.Errorf("%s is required and must be %q or a list of channel IDs", EnvAllowedChannels, wildcardToken)
+	}
+
+	tokens := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		t := strings.TrimSpace(part)
+		if t != "" {
+			tokens = append(tokens, t)
+		}
+	}
+	if len(tokens) == 0 {
+		return Allowlist{}, errors.New(EnvAllowedChannels + " did not contain any channel IDs")
+	}
+
+	// Wildcard mode: exactly one token, and it must be the literal "*".
+	for _, t := range tokens {
+		if t == wildcardToken {
+			if len(tokens) != 1 {
+				return Allowlist{}, fmt.Errorf("%s: %q cannot be combined with channel IDs", EnvAllowedChannels, wildcardToken)
+			}
+			return wildcardAllowlist(), nil
+		}
 	}
 
 	seen := make(map[string]struct{})
-	ordered := make([]string, 0)
-	for _, part := range strings.Split(raw, ",") {
-		id := strings.TrimSpace(part)
-		if id == "" {
-			continue
-		}
+	ordered := make([]string, 0, len(tokens))
+	for _, id := range tokens {
 		if err := validate.ChannelID(id); err != nil {
 			return Allowlist{}, fmt.Errorf("%s contains an invalid channel ID: %w", EnvAllowedChannels, err)
 		}
@@ -107,10 +130,6 @@ func parseAllowlist(raw string) (Allowlist, error) {
 		}
 		seen[id] = struct{}{}
 		ordered = append(ordered, id)
-	}
-
-	if len(ordered) == 0 {
-		return Allowlist{}, errors.New(EnvAllowedChannels + " did not contain any valid channel IDs")
 	}
 	return newAllowlist(ordered), nil
 }

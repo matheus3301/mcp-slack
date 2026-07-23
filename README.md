@@ -181,8 +181,11 @@ carries the full model. The short version:
 
 - Bot token only (`xoxb-`). User tokens (`xoxp-`) and browser tokens
   (`xoxc-`, `xoxd-`) are rejected at startup.
-- Every read passes through the allowlist. Only channels you list, and that the
-  bot has joined, are readable. The server never enumerates the workspace.
+- Every read passes through the allowlist. In explicit mode only the listed IDs
+  are readable. In wildcard mode only channels the bot currently belongs to are
+  readable, checked against Slack on every history and replies request. Either
+  way the server never enumerates the workspace and never returns a non-member
+  channel, DM, or MPIM.
 - No write, no search, no dynamic method proxy. A static test enforces this.
 - Bad config stops the process. No token or raw upstream detail reaches the logs
   or an error response. No message body is cached. Page sizes and retries are
@@ -218,9 +221,34 @@ carries the full model. The short version:
 | Variable | Required | Format | Description |
 | --- | --- | --- | --- |
 | `SLACK_BOT_TOKEN` | yes | `xoxb-…` | Slack bot token. Never logged. Any other token type is rejected. |
-| `SLACK_READ_ALLOWED_CHANNELS` | yes | `C…,G…`, comma-separated | The only channels that can be read. `C…` (public) and `G…` (private) IDs only. DMs and names are rejected. At least one is required. |
+| `SLACK_READ_ALLOWED_CHANNELS` | yes | `C…,G…`, comma-separated, or `*` | Which channels the server may read. See below. |
 
 Both are validated at startup. A missing or malformed value stops the process.
+
+### The read allowlist
+
+`SLACK_READ_ALLOWED_CHANNELS` takes one of two forms:
+
+- An explicit list of channel IDs, for example `C0123456789,G0ABCDEFG`. Only
+  `C…` (public) and `G…` (private) IDs are accepted. The server reads these and
+  no others.
+- The single literal `*`, which means every public or private channel the bot
+  is a member of right now. Membership is the boundary: the bot reads a channel
+  only while it is invited, and stops the moment it is removed.
+
+The value is never empty and never a mix. An empty or missing value is a startup
+error. `*` combined with any ID is rejected. Channel names, DMs (`D…`), and
+multi-party DMs are always rejected, in both forms.
+
+Wildcard mode trades a curated list for membership as the control. It suits a
+bot whose channel set changes often, where inviting and removing the bot is the
+natural way to grant and revoke access. Explicit mode suits a fixed, audited
+set of channels. Pick explicit when you want the allowlist itself to be the
+record of what the server can see.
+
+In wildcard mode the server verifies membership against Slack before returning
+any message, and lists channels through a member-scoped API that never sees the
+rest of the workspace. It never returns a channel the bot has not joined.
 
 ## Running locally
 
@@ -256,7 +284,13 @@ before a handler runs. The server then re-validates and applies the allowlist.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `channel_ids` | `string[]` | no | A subset of allowlisted IDs to fetch. Omit it to return every allowlisted channel. IDs outside the allowlist are rejected. |
+| `channel_ids` | `string[]` | no | Channel IDs to fetch. Each is checked against the policy and must be one the bot has joined; a non-member ID is an error. Omit to list all readable channels. |
+| `limit` | `int` | no | Wildcard listing only: channels per page, `1..100`, default `20`. |
+| `cursor` | `string` | no | Wildcard listing only: `next_cursor` from a previous response. |
+
+With `channel_ids` omitted, explicit mode returns the allowlisted channels and
+wildcard mode pages through the bot's member channels (`next_cursor` is set when
+more remain). A non-member or DM/MPIM channel is never returned.
 
 ```jsonc
 // arguments
@@ -390,7 +424,8 @@ mcp_servers:
     transport: stdio
     env:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      # The channels this server may read.
+      # An explicit list of channel IDs, or "*" for every channel the bot
+      # is a member of. See "The read allowlist" above.
       SLACK_READ_ALLOWED_CHANNELS: "C0123456789,C0987654321"
 ```
 

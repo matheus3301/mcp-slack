@@ -28,15 +28,20 @@ The server is built so that the following hold by construction, not by policy:
    begin with `xoxb-`. User tokens (`xoxp-`), browser/session tokens
    (`xoxc-`/`xoxd-`), and app-level tokens (`xoxa-`) are rejected at startup.
 
-3. **Channel allowlist.** Every read is gated by an explicit, comma-separated
-   allowlist of channel IDs in `SLACK_READ_ALLOWED_CHANNELS`. Only `C…` and
-   `G…` IDs are accepted; direct messages (`D…`) are rejected by format, and a
-   defense-in-depth check refuses any channel Slack reports as an IM/MPIM. The
-   workspace is never enumerated: channel metadata is fetched one ID at a time.
+3. **Channel allowlist.** Every read is gated by `SLACK_READ_ALLOWED_CHANNELS`.
+   It is either an explicit, comma-separated list of channel IDs or the single
+   literal `*`. Only `C…` and `G…` IDs are accepted; direct messages (`D…`) are
+   rejected by format, and a defense-in-depth check refuses any channel Slack
+   reports as an IM/MPIM. The workspace is never enumerated. In explicit mode,
+   metadata is fetched one ID at a time. In wildcard (`*`) mode the server reads
+   only channels the bot currently belongs to: history and replies verify
+   membership against Slack before returning content, and listing uses the
+   member-scoped `users.conversations` API rather than a workspace listing. A
+   non-member channel is never returned.
 
 4. **Fail closed.** A missing/invalid token or an empty/invalid allowlist is a
-   fatal startup error. The process never starts in a degraded, "allow all"
-   mode.
+   fatal startup error. `*` combined with any ID is rejected. The process never
+   starts in a degraded, "allow all" mode; wildcard still means member-only.
 
 5. **No secret leakage.** The token is never logged and never included in any
    error returned to the MCP client. Slack and transport errors are collapsed
@@ -60,7 +65,8 @@ The server is built so that the following hold by construction, not by policy:
 | Threat | Mitigation |
 | --- | --- |
 | Compromised/over-scoped token | Bot token only; grant only `channels:read`, `groups:read`, `channels:history`, `groups:history` |
-| Agent asked to read a sensitive channel | Allowlist gate; channel must be added explicitly and the bot must be invited |
+| Agent asked to read a sensitive channel | Allowlist gate: in explicit mode the ID must be listed; in wildcard mode the bot must be a member, verified per request |
+| Wildcard reading a channel after the bot is removed | Membership is checked against Slack on every history/replies request, so access ends when the bot leaves |
 | Prompt-injection tricking the agent into writing to Slack | No write tool exists in this server |
 | Data exfiltration via error strings | Errors sanitized to fixed codes; no token or raw payload in errors |
 | Runaway pagination / DoS on Slack | Page size clamp, bounded retries, context timeouts |

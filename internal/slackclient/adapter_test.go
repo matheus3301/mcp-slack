@@ -138,6 +138,61 @@ func TestAdapter_Replies(t *testing.T) {
 	}
 }
 
+func TestAdapter_MemberChannels_ShapesFiltersPaginates(t *testing.T) {
+	t.Parallel()
+	f := newFakeSlack(t)
+	// users.conversations returns limited objects that omit is_member; the
+	// adapter must record membership anyway and drop any im/mpim.
+	f.handle("users.conversations", `{
+		"ok": true,
+		"channels": [
+			{"id":"C01234567","name":"general","is_channel":true},
+			{"id":"G0ABCDEFG","name":"private-team","is_group":true,"is_private":true},
+			{"id":"G0MPIM0001","name":"mpdm-a--b","is_mpim":true},
+			{"id":"D0AB00001","is_im":true}
+		],
+		"response_metadata": {"next_cursor": "NEXTPAGE"}
+	}`)
+
+	page, err := f.api(t).MemberChannels(context.Background(), ListParams{Limit: 50, Cursor: "PREV"})
+	if err != nil {
+		t.Fatalf("MemberChannels: %v", err)
+	}
+	if page.NextCursor != "NEXTPAGE" {
+		t.Errorf("next cursor = %q", page.NextCursor)
+	}
+	if len(page.Channels) != 2 {
+		t.Fatalf("want 2 channels after filtering im/mpim, got %d: %+v", len(page.Channels), page.Channels)
+	}
+	for _, c := range page.Channels {
+		if !c.IsMember {
+			t.Errorf("member listing must mark channels as members: %+v", c)
+		}
+		if c.IsIM || c.IsMpIM {
+			t.Errorf("im/mpim leaked: %+v", c)
+		}
+	}
+	// Requested types must scope to public+private channels, and paging args
+	// must be forwarded.
+	if got := f.lastForm["types"]; got != "public_channel,private_channel" {
+		t.Errorf("types = %q", got)
+	}
+	if f.lastForm["limit"] != "50" || f.lastForm["cursor"] != "PREV" {
+		t.Errorf("paging args not forwarded: %v", f.lastForm)
+	}
+}
+
+func TestAdapter_MemberChannels_ErrorSanitized(t *testing.T) {
+	t.Parallel()
+	f := newFakeSlack(t)
+	f.handle("users.conversations", `{"ok": false, "error": "invalid_auth"}`)
+	_, err := f.api(t).MemberChannels(context.Background(), ListParams{})
+	var e *Error
+	if err == nil || !asError(err, &e) || e.Code != CodeAuthFailed {
+		t.Fatalf("want AUTH_FAILED, got %v", err)
+	}
+}
+
 func TestAdapter_SlackErrorSanitized(t *testing.T) {
 	t.Parallel()
 	f := newFakeSlack(t)

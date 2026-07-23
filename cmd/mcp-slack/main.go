@@ -64,9 +64,14 @@ func run() error {
 	}
 
 	// Diagnostics go to stderr only, and never include the token or any
-	// message content. The channel count is safe operational metadata.
+	// message content. The channel count and mode are safe operational metadata.
 	logger := log.New(os.Stderr, "mcp-slack ", log.LstdFlags|log.LUTC)
-	logger.Printf("starting version=%s allowlisted_channels=%d", version, cfg.Allowlist().Len())
+	allow := cfg.Allowlist()
+	if allow.Wildcard() {
+		logger.Printf("starting version=%s read_allowlist=wildcard(member-scoped)", version)
+	} else {
+		logger.Printf("starting version=%s read_allowlist=%d channels", version, allow.Len())
+	}
 
 	api := slackclient.New(cfg.BotToken())
 	tools := &mcpserver.Tools{API: api, Allow: cfg.Allowlist()}

@@ -36,8 +36,8 @@ func New(tools *Tools, version string) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolChannelsList,
-		Description: "List metadata (name, privacy, membership, topic, purpose) for the explicitly allowlisted Slack channels. Does not enumerate the workspace and returns no message content.",
-		Annotations: readOnlyAnnotations("List allowlisted Slack channels"),
+		Description: "List metadata (name, privacy, membership, topic, purpose) for readable Slack channels: the allowlisted ones, or in wildcard mode the channels the bot belongs to. Never enumerates the workspace, never returns a non-member channel, and returns no message content.",
+		Annotations: readOnlyAnnotations("List readable Slack channels"),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in ChannelsListInput) (*mcp.CallToolResult, ChannelsListOutput, error) {
 		out, err := tools.ChannelsList(ctx, in)
 		return nil, out, err

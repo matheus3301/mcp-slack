@@ -12,11 +12,13 @@ type fakeAPI struct {
 	infoByID    map[string]*slackclient.ChannelMeta
 	historyByID map[string]*slackclient.Page
 	repliesByID map[string]*slackclient.Page
-	err         error // if set, every method returns it
+	memberPages []*slackclient.ChannelPage // returned in order, one per call
+	err         error                      // if set, every method returns it
 
 	infoCalls    []string
 	historyCalls []slackclient.HistoryParams
 	repliesCalls []slackclient.RepliesParams
+	memberCalls  []slackclient.ListParams
 }
 
 func newFakeAPI() *fakeAPI {
@@ -61,4 +63,16 @@ func (f *fakeAPI) ConversationReplies(_ context.Context, p slackclient.RepliesPa
 		return &slackclient.Page{}, nil
 	}
 	return page, nil
+}
+
+func (f *fakeAPI) MemberChannels(_ context.Context, p slackclient.ListParams) (*slackclient.ChannelPage, error) {
+	f.memberCalls = append(f.memberCalls, p)
+	if f.err != nil {
+		return nil, f.err
+	}
+	idx := len(f.memberCalls) - 1
+	if idx < len(f.memberPages) {
+		return f.memberPages[idx], nil
+	}
+	return &slackclient.ChannelPage{}, nil
 }

@@ -14,6 +14,7 @@ type slackAPI interface {
 	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 	GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationRepliesContext(ctx context.Context, params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
+	GetConversationsForUserContext(ctx context.Context, params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error)
 }
 
 // adapter implements API on top of the Slack SDK, adding bounded retries and
@@ -87,7 +88,7 @@ func (a *adapter) ConversationInfo(ctx context.Context, channelID string) (*Chan
 	if err != nil {
 		return nil, Sanitize(err)
 	}
-	return mapChannel(ch), nil
+	return mapChannel(ch, false), nil
 }
 
 func (a *adapter) ConversationHistory(ctx context.Context, p HistoryParams) (*Page, error) {
@@ -143,8 +144,46 @@ func (a *adapter) ConversationReplies(ctx context.Context, p RepliesParams) (*Pa
 	}, nil
 }
 
-// mapChannel projects a Slack channel down to ChannelMeta.
-func mapChannel(ch *slack.Channel) *ChannelMeta {
+// MemberChannels lists the public and private channels the bot belongs to,
+// backed by users.conversations. That method returns only member channels, so
+// this never enumerates the workspace. DMs and MPIMs are excluded by the
+// requested types and filtered again as defense in depth.
+func (a *adapter) MemberChannels(ctx context.Context, p ListParams) (*ChannelPage, error) {
+	var (
+		chans  []slack.Channel
+		cursor string
+	)
+	err := withRetry(ctx, a.policy, a.sleep, func() error {
+		var e error
+		chans, cursor, e = a.sc.GetConversationsForUserContext(ctx, &slack.GetConversationsForUserParameters{
+			// UserID empty => the token's own user (the bot).
+			Types:           []string{"public_channel", "private_channel"},
+			Limit:           p.Limit,
+			Cursor:          p.Cursor,
+			ExcludeArchived: false,
+		})
+		return e
+	})
+	if err != nil {
+		return nil, Sanitize(err)
+	}
+
+	out := &ChannelPage{Channels: make([]ChannelMeta, 0, len(chans)), NextCursor: cursor}
+	for i := range chans {
+		if chans[i].IsIM || chans[i].IsMpIM {
+			continue
+		}
+		// users.conversations only returns member channels, but the limited
+		// object omits is_member; record membership explicitly.
+		out.Channels = append(out.Channels, *mapChannel(&chans[i], true))
+	}
+	return out, nil
+}
+
+// mapChannel projects a Slack channel down to ChannelMeta. forceMember records
+// membership for sources (users.conversations) whose limited objects omit the
+// is_member field even though every entry is a member channel.
+func mapChannel(ch *slack.Channel, forceMember bool) *ChannelMeta {
 	if ch == nil {
 		return nil
 	}
@@ -153,7 +192,7 @@ func mapChannel(ch *slack.Channel) *ChannelMeta {
 		Name:       ch.Name,
 		IsPrivate:  ch.IsPrivate,
 		IsArchived: ch.IsArchived,
-		IsMember:   ch.IsMember,
+		IsMember:   ch.IsMember || forceMember,
 		IsChannel:  ch.IsChannel,
 		IsGroup:    ch.IsGroup,
 		IsIM:       ch.IsIM,

@@ -56,10 +56,13 @@ var forbiddenSlackMethods = []string{
 }
 
 // allowedSlackMethodCalls are the ONLY Slack SDK methods the server may invoke.
+// GetConversationsForUserContext maps to users.conversations, a member-scoped
+// read (not workspace enumeration like conversations.list).
 var allowedSlackMethodCalls = []string{
 	"GetConversationInfoContext",
 	"GetConversationHistoryContext",
 	"GetConversationRepliesContext",
+	"GetConversationsForUserContext",
 }
 
 // TestNoForbiddenSlackMethodsInSource statically verifies that no write, search,

@@ -86,6 +86,55 @@ func TestLoad_AllowlistRejections(t *testing.T) {
 	}
 }
 
+func TestLoad_WildcardOnly(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"*", "  *  "} {
+		cfg, err := Load(fakeEnv(map[string]string{
+			EnvBotToken:        goodToken,
+			EnvAllowedChannels: raw,
+		}))
+		if err != nil {
+			t.Fatalf("Load(%q) error: %v", raw, err)
+		}
+		a := cfg.Allowlist()
+		if !a.Wildcard() {
+			t.Errorf("Load(%q) should be wildcard", raw)
+		}
+		if a.Len() != 0 || len(a.IDs()) != 0 {
+			t.Errorf("wildcard allowlist should have no explicit IDs")
+		}
+		// Policy layer permits any well-formed ID in wildcard mode.
+		if !a.Allowed("C01234567") || !a.Allowed("G0ABCDEFG") {
+			t.Errorf("wildcard should permit valid C/G IDs at policy layer")
+		}
+	}
+}
+
+func TestLoad_WildcardMixedIsInvalid(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"*,C01234567", "C01234567,*", "*, *", "*,*"} {
+		_, err := Load(fakeEnv(map[string]string{
+			EnvBotToken:        goodToken,
+			EnvAllowedChannels: raw,
+		}))
+		if err == nil {
+			t.Errorf("Load(%q) must reject '*' combined with other tokens", raw)
+		}
+	}
+}
+
+func TestLoad_EmptyAllowlistStillFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"", "   ", ",, ,"} {
+		if _, err := Load(fakeEnv(map[string]string{
+			EnvBotToken:        goodToken,
+			EnvAllowedChannels: raw,
+		})); err == nil {
+			t.Errorf("Load(%q) must fail closed", raw)
+		}
+	}
+}
+
 func TestAllowlist_Immutable(t *testing.T) {
 	t.Parallel()
 	a := newAllowlist([]string{"C01234567", "G0ABCDEFG"})

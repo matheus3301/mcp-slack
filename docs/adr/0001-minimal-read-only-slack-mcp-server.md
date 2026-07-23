@@ -86,9 +86,35 @@ Key choices:
   slightly more operational work than a user token that sees everything. This is
   the point.
 
+## Wildcard (member-scoped) mode
+
+The allowlist accepts a single `*` in place of an ID list. It means every public
+or private channel the bot is a member of, and nothing else. Empty stays a
+startup error, and `*` cannot be mixed with IDs.
+
+We added this because a curated ID list does not fit a bot whose channel set
+changes often. The alternative people reach for is a token that can see the
+whole workspace, which is the posture this project exists to avoid. Membership
+is a control the operator already has: inviting the bot grants access, removing
+it revokes access, and both are visible in Slack.
+
+Two rules keep wildcard mode as tight as explicit mode:
+
+- History and replies verify membership against Slack (`conversations.info`,
+  `is_member`) before any content is read. Access ends the moment the bot leaves
+  a channel, with no restart or config change.
+- Listing uses `users.conversations`, which returns only the bot's member
+  channels. We do not call `conversations.list`, so the server never sees the
+  channels it is not in. DMs and MPIMs are excluded by request and filtered
+  again as defense in depth.
+
+The wider surface is the trade: wildcard mode can read any channel the bot joins
+later, so the invite becomes the grant. Operators who want the allowlist itself
+to be the audit record should stay with explicit IDs.
+
 ## Notes
 
-Adding a channel to this MCP server's allowlist only lets the client **read**
-that channel. This server cannot post anywhere. If a client also writes to Slack
-through some other mechanism, where it may post is configured there — entirely
-separately from this read allowlist.
+Adding a channel to this MCP server's allowlist, or inviting the bot in wildcard
+mode, only lets the client **read** that channel. This server cannot post
+anywhere. If a client also writes to Slack through some other mechanism, where
+it may post is configured there, separately from this read allowlist.
