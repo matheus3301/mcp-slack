@@ -1,8 +1,6 @@
-// Package mcpserver wires the three read-only Slack tools onto an MCP server.
-//
-// The entire tool surface is fixed at compile time: exactly three tools, all
-// annotated read-only and non-destructive. There is no dynamic method proxy and
-// no path by which a caller can reach an un-enumerated Slack API method.
+// Package mcpserver registers a fixed Slack tool catalog behind independent
+// capability and destination policies. Default configuration exposes only the
+// three legacy read tools. No arbitrary Slack method proxy is exposed.
 package mcpserver
 
 import (
@@ -10,12 +8,13 @@ import (
 	"fmt"
 
 	"github.com/matheus3301/mcp-slack/internal/config"
+	"github.com/matheus3301/mcp-slack/internal/receipts"
 	"github.com/matheus3301/mcp-slack/internal/slackclient"
 	"github.com/matheus3301/mcp-slack/internal/validate"
+	"github.com/slack-go/slack"
 )
 
-// Tool names. These are the only tool identifiers the server exposes and are
-// asserted by the regression test that forbids write/search tooling.
+// Legacy tool names, preserved for backwards compatibility.
 const (
 	ToolChannelsList = "slack_channels_list"
 	ToolHistory      = "slack_conversations_history"
@@ -26,8 +25,12 @@ const (
 // concurrent use: API implementations are expected to be concurrency-safe and
 // the allowlist is immutable.
 type Tools struct {
-	API   slackclient.API
-	Allow config.Allowlist
+	API      slackclient.API
+	Allow    config.Allowlist
+	Policy   config.Policy
+	Slack    *slack.Client
+	Store    *receipts.Store
+	Canceler slackclient.ScheduledCanceler
 }
 
 // ---- slack_channels_list ----
@@ -66,6 +69,9 @@ func (t *Tools) ChannelsList(ctx context.Context, in ChannelsListInput) (Channel
 // policy, membership, and the DM/MPIM ban. A requested channel the bot has not
 // joined is a hard error, so the caller gets a clear signal.
 func (t *Tools) channelsByID(ctx context.Context, ids []string) (ChannelsListOutput, error) {
+	if t.Policy.Expanded() && len(ids) > 100 {
+		return ChannelsListOutput{}, invalid()
+	}
 	seen := make(map[string]struct{}, len(ids))
 	out := ChannelsListOutput{Channels: make([]slackclient.ChannelMeta, 0, len(ids))}
 	for _, id := range ids {
@@ -79,6 +85,17 @@ func (t *Tools) channelsByID(ctx context.Context, ids []string) (ChannelsListOut
 			continue
 		}
 		seen[id] = struct{}{}
+		if t.Policy.Expanded() {
+			meta, err := t.info(ctx, ChannelInput{id})
+			if err != nil {
+				return ChannelsListOutput{}, err
+			}
+			if meta.IsIM || meta.IsMpIM {
+				return ChannelsListOutput{}, denied()
+			}
+			out.Channels = append(out.Channels, meta)
+			continue
+		}
 
 		meta, err := t.API.ConversationInfo(ctx, id)
 		if err != nil {
@@ -123,6 +140,13 @@ func (t *Tools) channelsForMember(ctx context.Context, limit int, cursor string)
 		if c.IsIM || c.IsMpIM || !c.IsMember {
 			continue
 		}
+		if t.Policy.Expanded() {
+			meta, err := t.info(ctx, ChannelInput{c.ID})
+			if err != nil {
+				return ChannelsListOutput{}, err
+			}
+			c = meta
+		}
 		out.Channels = append(out.Channels, c)
 	}
 	return out, nil
@@ -142,14 +166,11 @@ type HistoryInput struct {
 
 // History returns bounded message history for one allowlisted channel.
 func (t *Tools) History(ctx context.Context, in HistoryInput) (slackclient.Page, error) {
-	if err := t.requireAllowed(in.ChannelID); err != nil {
+	if err := t.requireRead(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 	limit, err := t.validateWindow(in.Limit, in.Cursor, in.Oldest, in.Latest)
 	if err != nil {
-		return slackclient.Page{}, err
-	}
-	if err := t.requireMembership(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 
@@ -182,7 +203,7 @@ type RepliesInput struct {
 
 // Replies returns bounded replies for one thread in an allowlisted channel.
 func (t *Tools) Replies(ctx context.Context, in RepliesInput) (slackclient.Page, error) {
-	if err := t.requireAllowed(in.ChannelID); err != nil {
+	if err := t.requireRead(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 	if err := validate.RequiredTimestamp(in.ThreadTS); err != nil {
@@ -190,9 +211,6 @@ func (t *Tools) Replies(ctx context.Context, in RepliesInput) (slackclient.Page,
 	}
 	limit, err := t.validateWindow(in.Limit, in.Cursor, in.Oldest, in.Latest)
 	if err != nil {
-		return slackclient.Page{}, err
-	}
-	if err := t.requireMembership(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 

@@ -61,7 +61,7 @@ func New(token string, opts ...Option) API {
 		fn(&o)
 	}
 
-	slackOpts := []slack.Option{slack.OptionHTTPClient(o.httpClient)}
+	slackOpts := []slack.Option{slack.OptionHTTPClient(collaborationHTTPClient(o.httpClient))}
 	if o.apiURL != "" {
 		slackOpts = append(slackOpts, slack.OptionAPIURL(o.apiURL))
 	}

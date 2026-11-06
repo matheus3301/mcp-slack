@@ -1,6 +1,6 @@
 # ADR 0001: A minimal, read-only, bot-token Slack MCP server
 
-- **Status:** Accepted
+- **Status:** Superseded for opt-in configurations by [ADR 0002](0002-opt-in-slack-mutations.md); the default read-only mode still follows this decision.
 - **Date:** 2026-07-23
 - **Deciders:** Maintainer
 

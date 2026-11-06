@@ -37,6 +37,7 @@ var forbiddenTokenPrefixes = []string{"xoxc-", "xoxd-", "xoxp-", "xoxa-", "xoxr-
 type Config struct {
 	botToken  string
 	allowlist Allowlist
+	Policy    Policy
 }
 
 // BotToken returns the validated Slack bot token. Callers must not log it.
@@ -57,12 +58,20 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, err
 	}
 
-	allow, err := parseAllowlist(getenv(EnvAllowedChannels))
+	policy, err := loadPolicy(getenv)
+	if err != nil {
+		return nil, err
+	}
+	var allow Allowlist
+	// A deliberately filtered write-only instance needs no read grant.
+	if strings.TrimSpace(getenv(EnvAllowedChannels)) != "" || policy.Enabled("slack_channels_list") || policy.Enabled("slack_conversations_history") || policy.Enabled("slack_conversations_replies") {
+		allow, err = parseAllowlist(getenv(EnvAllowedChannels))
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	return &Config{botToken: token, allowlist: allow}, nil
+	return &Config{botToken: token, allowlist: allow, Policy: policy}, nil
 }
 
 // validateToken enforces that only a Slack bot token is accepted. The token

@@ -107,6 +107,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           {
+            awk -v header="## ${TAG}" '
+              $0 == header { in_release=1; next }
+              in_release && /^## / { exit }
+              in_release { print }
+            ' CHANGELOG.md
+            printf '\n[Tool catalog and setup](https://github.com/%s/blob/%s/README.md) · [Configuration](https://github.com/%s/blob/%s/docs/configuration.md)\n\n' \
+              "$GITHUB_REPOSITORY" "$TAG" "$GITHUB_REPOSITORY" "$TAG"
             printf 'Prebuilt, statically linked binaries for linux (amd64, arm64), darwin (amd64, arm64), and windows (amd64).\n\n'
             printf 'Verify a download:\n\n'
             printf '    sha256sum -c SHA256SUMS --ignore-missing\n\n'

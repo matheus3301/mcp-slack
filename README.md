@@ -1,445 +1,211 @@
 # mcp-slack
 
-A read-only [Model Context Protocol](https://modelcontextprotocol.io) (MCP)
-server for Slack. It gives an MCP client three things and nothing else: channel
-metadata, channel history, and thread replies. It speaks MCP over stdio,
-authenticates with a Slack bot token, and reads only the channels you name in an
-allowlist.
+A Slack server for [Model Context Protocol](https://modelcontextprotocol.io)
+clients. Read channel history and threads, or opt into posting, scheduling,
+reactions, pins, bookmarks, files, and direct messages. The client talks to a Go
+subprocess over stdio; every Slack action uses the identity of your installed bot.
 
-The point is a surface small enough to hand to an autonomous, prompt-injectable
-client without losing sleep. The server cannot post, edit, delete, react, mark
-as read, upload or download files, search, manage usergroups, open DMs, or call
-an arbitrary Slack method. Those paths do not exist in the code, and a test
-fails the build if anyone adds one.
+The default configuration exposes the same three read tools as v0.2.0. Reading
+a channel does not authorize writing to it. Write grants name channel IDs
+explicitly, and direct messages have a separate policy.
 
-- Module: `github.com/matheus3301/mcp-slack`
-- Entrypoint: `./cmd/mcp-slack`
-- Go: 1.26.x (see [`go.mod`](go.mod) and [`.mise.toml`](.mise.toml))
-- SDKs: [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) (official MCP Go SDK) and [`github.com/slack-go/slack`](https://github.com/slack-go/slack)
-
-## Contents
-
-- [Quick start](#quick-start)
 - [Install](#install)
-- [The three tools](#the-three-tools)
-- [Architecture](#architecture)
-- [Threat model](#threat-model)
-- [Slack app: scopes and bot membership](#slack-app-scopes-and-bot-membership)
-- [Environment variables](#environment-variables)
-- [Running locally](#running-locally)
-- [Tool schemas and examples](#tool-schemas-and-examples)
-- [Error codes](#error-codes)
-- [Local development](#local-development)
-- [Security checks](#security-checks)
-- [Using it from an MCP client](#using-it-from-an-mcp-client)
-
-## Quick start
-
-The fastest path is to grab the prebuilt binary for your platform, then point an
-MCP client at it. This needs the [GitHub CLI](https://cli.github.com), which
-detects your platform and downloads the latest release.
-
-```bash
-# 1. Download the binary for this machine and unpack it.
-os=$(uname -s | tr '[:upper:]' '[:lower:]')            # linux or darwin
-arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
-gh release download --repo matheus3301/mcp-slack --pattern "mcp-slack_*_${os}_${arch}.tar.gz"
-tar -xzf mcp-slack_*_"${os}"_"${arch}".tar.gz
-
-# 2. Move it onto your PATH and confirm it runs.
-sudo install mcp-slack /usr/local/bin/mcp-slack
-mcp-slack --version
-```
-
-Windows users download `mcp-slack_<version>_windows_amd64.zip` from the
-[releases page](https://github.com/matheus3301/mcp-slack/releases) and unzip it.
-No CLI needed. To verify the download and its provenance first, see
-[Install](#install).
-
-Create a Slack app, give its bot token the four read scopes, install it, and
-invite the bot to each channel you want to read. The steps are in
-[Slack app: scopes and bot membership](#slack-app-scopes-and-bot-membership).
-
-Then register the server with your MCP client. The token comes from the
-environment; the allowlist is a separate value:
-
-```yaml
-mcp_servers:
-  slack:
-    command: /usr/local/bin/mcp-slack
-    transport: stdio
-    env:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      SLACK_READ_ALLOWED_CHANNELS: "C0123456789,C0987654321"
-```
-
-Restart the client. It launches `mcp-slack` over stdio, and the three tools
-appear. To prove the server works on its own before wiring a client, run the
-[stdio smoke test](#running-locally).
+- [Set up a Slack app](#set-up-a-slack-app)
+- [Configure your MCP client](#configure-your-mcp-client)
+- [Tool catalog](#tool-catalog)
+- [Examples](#examples)
+- [Security and troubleshooting](#security-and-troubleshooting)
+- [Develop and release](#develop-and-release)
 
 ## Install
 
-Two supported paths. Pick one.
+Download the archive for your operating system and architecture from the
+[releases page](https://github.com/matheus3301/mcp-slack/releases). Releases
+include Linux and macOS archives for amd64 and arm64, a Windows amd64 ZIP,
+SHA256SUMS, and GitHub build provenance. Windows supports read and diagnostic
+tools; the release rejects write-enabled Windows configurations until native
+receipt durability and artifact access are supported. For example, on Linux amd64:
 
-### Prebuilt binary
-
-Each tagged release ships statically linked binaries for the platforms below.
-Every archive holds the binary, `LICENSE`, and `README.md`. A `SHA256SUMS` file
-covers all archives, and each archive carries a signed build-provenance
-attestation.
-
-| Platform | Asset |
-| --- | --- |
-| Linux amd64 | `mcp-slack_<version>_linux_amd64.tar.gz` |
-| Linux arm64 | `mcp-slack_<version>_linux_arm64.tar.gz` |
-| macOS amd64 | `mcp-slack_<version>_darwin_amd64.tar.gz` |
-| macOS arm64 | `mcp-slack_<version>_darwin_arm64.tar.gz` |
-| Windows amd64 | `mcp-slack_<version>_windows_amd64.zip` |
-
-Download the archive for your platform along with `SHA256SUMS`, then check the
-hash and the provenance before you trust the binary:
-
-```bash
-# Integrity: the archive matches the published checksum.
+~~~bash
+gh release download v0.3.0 --repo matheus3301/mcp-slack \
+  --pattern 'mcp-slack_v0.3.0_linux_amd64.tar.gz' --pattern SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-
-# Provenance: GitHub built this archive from this repository.
-gh attestation verify mcp-slack_<version>_linux_amd64.tar.gz \
+gh attestation verify mcp-slack_v0.3.0_linux_amd64.tar.gz \
   --repo matheus3301/mcp-slack
-
-tar -xzf mcp-slack_<version>_linux_amd64.tar.gz
+tar -xzf mcp-slack_v0.3.0_linux_amd64.tar.gz
 ./mcp-slack --version
-```
+~~~
 
-### From source
+On macOS, use `shasum -a 256 -c SHA256SUMS` with the matching archive entry.
+From source, use the pinned toolchain in [go.mod](go.mod):
 
-```bash
-go install github.com/matheus3301/mcp-slack/cmd/mcp-slack@v0.1.0
-```
+~~~bash
+go install github.com/matheus3301/mcp-slack/cmd/mcp-slack@v0.3.0
+~~~
 
-Either way, `mcp-slack --version` prints the version, commit, build date, and Go
-toolchain.
+## Set up a Slack app
 
-## The three tools
+Create a Slack app for a workspace you administer, install it, and invite its bot
+to the channels it should access. Store the **bot token** in your MCP client's
+secret store or process environment. Start with the scopes for the channel types
+you read and add only the scopes needed for the capabilities you enable.
 
-| Tool | Slack method | What it returns |
-| --- | --- | --- |
-| `slack_channels_list` | `conversations.info`, one call per allowlisted ID | Metadata for allowlisted channels: name, privacy, membership, topic, purpose, member count |
-| `slack_conversations_history` | `conversations.history` | A bounded page of messages from one allowlisted channel |
-| `slack_conversations_replies` | `conversations.replies` | A bounded page of replies in one thread of one allowlisted channel |
-
-Every tool is annotated `readOnlyHint: true`, `idempotentHint: true`,
-`destructiveHint: false`.
-
-## Architecture
-
-```
-        stdin/stdout (MCP / JSON-RPC)
-                  │
-          ┌───────▼────────┐
-          │  cmd/mcp-slack │  loads & validates config, wires deps
-          └───────┬────────┘
-                  │
-       ┌──────────▼───────────┐     three tools, fixed at compile time
-       │  internal/mcpserver  │     validate, check allowlist, shape result
-       └──────────┬───────────┘
-                  │ slackclient.API (interface, injected)
-       ┌──────────▼───────────┐
-       │ internal/slackclient │     adapter over slack-go:
-       │                      │       bounded 429 retry
-       │                      │       error sanitization
-       │                      │       Slack types to minimal structs
-       └──────────┬───────────┘
-                  │ HTTPS (bot token)
-             Slack Web API
-```
-
-The layout follows the standard Go convention: the executable lives under
-`cmd/`, and everything reusable lives under `internal/` so nothing leaks into
-another module's import graph.
-
-- **`cmd/mcp-slack`** holds `main`: read config, build the client, register the
-  tools, run over stdio, handle signals.
-- **`internal/config`** loads and validates `SLACK_BOT_TOKEN` and
-  `SLACK_READ_ALLOWED_CHANNELS`. It fails closed and owns the immutable
-  `Allowlist`.
-- **`internal/validate`** holds the validators for channel IDs, Slack
-  timestamps, cursors, and page limits. Config and the tools share them.
-- **`internal/slackclient`** defines a small `API` interface and an adapter over
-  `slack-go`. The interface is the seam that lets the tools run in tests against
-  a fake, with no network and no credentials. This layer also owns the bounded
-  rate-limit retry and the error sanitization.
-- **`internal/mcpserver`** registers the three tools with the MCP SDK, runs
-  input validation and the allowlist check, and shapes deterministic output.
-
-## Threat model
-
-Assume the client on the other end is autonomous and can be steered by a
-prompt-injection attack. Whatever the server can do, that client can be tricked
-into doing. So the server does as little as possible. [`SECURITY.md`](SECURITY.md)
-carries the full model. The short version:
-
-- Bot token only (`xoxb-`). User tokens (`xoxp-`) and browser tokens
-  (`xoxc-`, `xoxd-`) are rejected at startup.
-- Every read passes through the allowlist. In explicit mode only the listed IDs
-  are readable. In wildcard mode only channels the bot currently belongs to are
-  readable, checked against Slack on every history and replies request. Either
-  way the server never enumerates the workspace and never returns a non-member
-  channel, DM, or MPIM.
-- No write, no search, no dynamic method proxy. A static test enforces this.
-- Bad config stops the process. No token or raw upstream detail reaches the logs
-  or an error response. No message body is cached. Page sizes and retries are
-  bounded. The server opens no network listener; it only speaks stdio.
-
-## Slack app: scopes and bot membership
-
-1. Create a Slack app and give its bot token the minimum read scopes:
-
-   | Scope | Needed for |
-   | --- | --- |
-   | `channels:read` | metadata of public channels |
-   | `groups:read` | metadata of private channels |
-   | `channels:history` | history and replies in public channels |
-   | `groups:history` | history and replies in private channels |
-
-   Leave `mpim:*` and `im:*` off. The server rejects DMs and MPIMs, so those
-   scopes buy you nothing here.
-
-2. Install the app to the workspace and copy the Bot User OAuth Token. It starts
-   with `xoxb-`.
-
-3. Invite the bot to every channel you plan to allowlist. Run `/invite @your-bot`
-   in each one. A bot reads only channels it has joined; without the invite,
-   reads return `NOT_IN_CHANNEL`.
-
-4. Collect the channel IDs, not the names. In Slack, open a channel, choose
-   *View channel details*, and read the ID at the bottom (for example
-   `C0123456789`).
-
-## Environment variables
-
-| Variable | Required | Format | Description |
-| --- | --- | --- | --- |
-| `SLACK_BOT_TOKEN` | yes | `xoxb-…` | Slack bot token. Never logged. Any other token type is rejected. |
-| `SLACK_READ_ALLOWED_CHANNELS` | yes | `C…,G…`, comma-separated, or `*` | Which channels the server may read. See below. |
-
-Both are validated at startup. A missing or malformed value stops the process.
-
-### The read allowlist
-
-`SLACK_READ_ALLOWED_CHANNELS` takes one of two forms:
-
-- An explicit list of channel IDs, for example `C0123456789,G0ABCDEFG`. Only
-  `C…` (public) and `G…` (private) IDs are accepted. The server reads these and
-  no others.
-- The single literal `*`, which means every public or private channel the bot
-  is a member of right now. Membership is the boundary: the bot reads a channel
-  only while it is invited, and stops the moment it is removed.
-
-The value is never empty and never a mix. An empty or missing value is a startup
-error. `*` combined with any ID is rejected. Channel names, DMs (`D…`), and
-multi-party DMs are always rejected, in both forms.
-
-Wildcard mode trades a curated list for membership as the control. It suits a
-bot whose channel set changes often, where inviting and removing the bot is the
-natural way to grant and revoke access. Explicit mode suits a fixed, audited
-set of channels. Pick explicit when you want the allowlist itself to be the
-record of what the server can see.
-
-In wildcard mode the server verifies membership against Slack before returning
-any message, and lists channels through a member-scoped API that never sees the
-rest of the workspace. It never returns a channel the bot has not joined.
-
-## Running locally
-
-You need Go 1.26.x. With [mise](https://mise.jdx.dev) the pinned toolchain comes
-from `.mise.toml`.
-
-```bash
-# Build
-go build -o dist/mcp-slack ./cmd/mcp-slack
-
-# Run. An MCP client normally launches this; you rarely run it by hand.
-export SLACK_BOT_TOKEN="xoxb-…"
-export SLACK_READ_ALLOWED_CHANNELS="C0123456789,C0987654321"
-./dist/mcp-slack
-```
-
-Drive it by hand with raw JSON-RPC over stdio:
-
-```bash
-{ printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1; } \
-  | SLACK_BOT_TOKEN="xoxb-…" SLACK_READ_ALLOWED_CHANNELS="C0123456789" ./dist/mcp-slack
-```
-
-## Tool schemas and examples
-
-The MCP SDK generates each input schema from a Go struct and validates arguments
-before a handler runs. The server then re-validates and applies the allowlist.
-
-### `slack_channels_list`
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `channel_ids` | `string[]` | no | Channel IDs to fetch. Each is checked against the policy and must be one the bot has joined; a non-member ID is an error. Omit to list all readable channels. |
-| `limit` | `int` | no | Wildcard listing only: channels per page, `1..100`, default `20`. |
-| `cursor` | `string` | no | Wildcard listing only: `next_cursor` from a previous response. |
-
-With `channel_ids` omitted, explicit mode returns the allowlisted channels and
-wildcard mode pages through the bot's member channels (`next_cursor` is set when
-more remain). A non-member or DM/MPIM channel is never returned.
-
-```jsonc
-// arguments
-{ "channel_ids": ["C0123456789"] }
-
-// structured result
-{
-  "channels": [
-    {
-      "id": "C0123456789",
-      "name": "general",
-      "is_private": false,
-      "is_archived": false,
-      "is_member": true,
-      "is_channel": true,
-      "num_members": 42,
-      "topic": "team topic",
-      "purpose": "team purpose",
-      "created": 1609459200
-    }
-  ]
-}
-```
-
-### `slack_conversations_history`
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `channel_id` | `string` | yes | Allowlisted `C…`/`G…` ID |
-| `limit` | `int` | no | `1..100`, default `20` |
-| `cursor` | `string` | no | `next_cursor` from a previous response |
-| `oldest` | `string` | no | Slack ts, for example `1699999999.123456` |
-| `latest` | `string` | no | Slack ts |
-| `inclusive` | `bool` | no | Include messages whose ts equals `oldest` or `latest` |
-
-```jsonc
-// arguments
-{ "channel_id": "C0123456789", "limit": 50 }
-
-// structured result
-{
-  "messages": [
-    { "type": "message", "ts": "1699999999.000100", "user": "U1", "text": "…" }
-  ],
-  "has_more": true,
-  "next_cursor": "dXNlcjpVMDYxTkZUVDI="
-}
-```
-
-### `slack_conversations_replies`
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `channel_id` | `string` | yes | Allowlisted `C…`/`G…` ID |
-| `thread_ts` | `string` | yes | ts of the thread's parent message, for example `1699999999.000100` |
-| `limit`, `cursor`, `oldest`, `latest`, `inclusive` | | no | Same as history |
-
-```jsonc
-// arguments
-{ "channel_id": "C0123456789", "thread_ts": "1699999999.000100", "limit": 100 }
-```
-
-Each message carries only the useful fields: `type`, `subtype`, `ts`,
-`thread_ts`, `user`, `bot_id`, `username`, `text`, `reply_count`, `edited_ts`.
-
-## Error codes
-
-A tool error comes back as an MCP tool error (`isError: true`) with a stable
-code. Slack and transport details never leak through it.
-
-| Code | Meaning |
+| Capability | Bot scopes |
 | --- | --- |
-| `INVALID_REQUEST` | Input failed validation: bad ID, ts, cursor, or limit |
-| `PERMISSION_DENIED` | Channel not allowlisted, missing scope, or a DM/MPIM |
-| `CHANNEL_NOT_FOUND` | Channel does not exist or is not accessible |
-| `NOT_IN_CHANNEL` | The bot has not joined the channel; invite it |
-| `THREAD_NOT_FOUND` | Thread or message not found |
-| `RATE_LIMITED` | Slack returned 429 after the bounded retries |
-| `TIMEOUT` | Context deadline or cancellation |
-| `AUTH_FAILED` | Token invalid, inactive, or revoked |
-| `UPSTREAM_ERROR` | Any other Slack or transport error, kept opaque on purpose |
+| Public channel metadata and history | `channels:read`, `channels:history` |
+| Private channel metadata and history | `groups:read`, `groups:history` |
+| Send, reply, edit/delete own messages, schedule and cancel | `chat:write` |
+| Look up allowed users | `users:read` |
+| Read or change reactions | `reactions:read`, `reactions:write` |
+| Read or change pins | `pins:read`, `pins:write` |
+| Read or change bookmarks | `bookmarks:read`, `bookmarks:write` |
+| Read or upload files | `files:read`, `files:write` |
+| Direct message metadata, history, and opening conversations | `im:read`, `im:history`, `im:write` |
+| Group DM metadata, history, and opening conversations | `mpim:read`, `mpim:history`, `mpim:write` |
 
-## Local development
+Opening a DM uses [conversations.open](https://docs.slack.dev/reference/methods/conversations.open/);
+sending the message also needs `chat:write`. Reinstall your app if Slack requires
+it after a scope change. Do not add `chat:write.public` or a human token to
+work around channel membership.
 
-```bash
-make check        # fmt-check, vet, staticcheck, test, test-race, security, build
-make test         # unit and integration tests
-make test-race    # race detector
-make lint         # go vet and staticcheck
-make security     # govulncheck and gosec
-make build        # reproducible Linux/amd64 binary into dist/
-```
+## Configure your MCP client
 
-The tests cover four levels:
+Point your client at the installed binary. Substitute example IDs with the
+actual Slack conversation IDs; channel names are not policy inputs. Client
+configuration formats vary. This is the usual stdio shape:
 
-- Unit tests for every validator, the allowlist including its denials, the page
-  limits, the response shaping, and each of the three tools.
-- A fake Slack HTTP server exercises the real adapter: shaping, pagination, the
-  429 retry, and error sanitization, all without credentials.
-- An MCP protocol test connects a real client over an in-memory transport and
-  asserts the exact tool names, the read-only annotations, the input schemas,
-  and the read behavior against fakes.
-- A regression test fails the build if a forbidden Slack write or search method,
-  or a fourth tool, ever appears in the source.
-
-## Security checks
-
-CI and the Makefile run the same set, pinned to fixed versions:
-
-- `gofmt`, `go vet`
-- `staticcheck` v0.7.0
-- `go test` and `go test -race`
-- `gosec` v2.28.0
-- `govulncheck` v1.6.0
-
-[`SECURITY.md`](SECURITY.md) holds the policy, the threat-model table, and the
-two residual findings, each documented and justified.
-
-## Using it from an MCP client
-
-The server is a stdio subprocess. A client launches it and speaks JSON-RPC over
-stdin and stdout. The bot token comes from the environment. The read allowlist
-is a separate value.
-
-Field names differ by client, but the shape is common:
-
-```yaml
+~~~yaml
 mcp_servers:
-  slack:
+  slack-read:
     command: /path/to/mcp-slack
     transport: stdio
     env:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      # An explicit list of channel IDs, or "*" for every channel the bot
-      # is a member of. See "The read allowlist" above.
       SLACK_READ_ALLOWED_CHANNELS: "C0123456789,C0987654321"
-```
+~~~
 
-A read grant is not a write grant. Adding a channel to
-`SLACK_READ_ALLOWED_CHANNELS` lets the client read that channel through this
-server. This server posts nowhere. If your client writes to Slack through some
-other mechanism, that is configured there, and this allowlist has no bearing on
-it.
+Use separate registrations of the same binary when your client assigns
+different trust levels to read and write tools. The server's authorization checks
+still apply even if the client trusts a tool.
 
-Build a static Linux binary for a deployment target:
+- **Read policy:** `SLACK_READ_ALLOWED_CHANNELS` is a nonempty comma-separated
+  list of public or private channel IDs. A single `*` means the channels the
+  bot has joined. It cannot be combined with IDs.
+- **Write policy:** `SLACK_WRITE_ALLOWED_CHANNELS` names specific channel IDs.
+  It never accepts `*`, a channel name, a user ID or a DM ID. A bot still has
+  to be a member of the destination channel.
+- **DM policy:** a separate opt-in controls whether the MCP can open, read, or
+  write bot DMs. Every human participant must be explicitly allowed. Giving the
+  bot access to a channel does not allow it to contact the members directly.
+- **Capability policy:** tools are registered only when enabled. Keep the
+  client's tool allowlist narrow as a second line of defense.
 
-```bash
-make build   # dist/mcp-slack, linux/amd64, static, stripped
-```
+See [configuration and examples](docs/configuration.md) for the complete
+environment reference, including channel publishing and a test DM setup.
+
+## Tool catalog
+
+These are the 29 tools available across configurations. The first three tools
+in **Legacy reads** are the only tools registered with a v0.2.0 configuration.
+
+| Group | Tool | What it does |
+| --- | --- | --- |
+| Legacy reads | `slack_channels_list` | List allowed member channels. |
+| Legacy reads | `slack_conversations_history` | Read a bounded page of conversation history. |
+| Legacy reads | `slack_conversations_replies` | Read a bounded page of thread replies. |
+| Diagnostics | `slack_auth_test` | Identify the connected workspace and bot. |
+| Conversation lookup | `slack_conversations_info` | Get metadata for an allowed conversation. |
+| Conversation lookup | `slack_conversations_members` | Page through members of an allowed conversation. |
+| Conversation lookup | `slack_chat_get_permalink` | Get the Slack link for a message in an allowed conversation. |
+| Conversation lookup | `slack_users_info` | Look up a user within the configured access policy. |
+| Conversation lookup | `slack_messages_search` | Search a bounded amount of one channel's history. |
+| Messages | `slack_chat_post_message` | Send a root message or reply with a root `thread_ts`. |
+| Messages | `slack_chat_update` | Edit the bot's own message. |
+| Messages | `slack_chat_delete` | Delete the bot's own message when enabled. |
+| Scheduling | `slack_chat_schedule_message` | Schedule a message to an allowed channel. |
+| Scheduling | `slack_chat_scheduled_messages_list` | List the bot's scheduled messages in a channel. |
+| Scheduling | `slack_chat_delete_scheduled_message` | Cancel one of the bot's scheduled messages in that channel. |
+| Reactions | `slack_reactions_get` | Read reactions on a message. |
+| Reactions | `slack_reactions_add` | Add a reaction as the bot. |
+| Reactions | `slack_reactions_remove` | Remove a reaction the bot added. |
+| Pins | `slack_pins_list` | List a channel's pins. |
+| Pins | `slack_pins_add` | Pin a message in its channel. |
+| Pins | `slack_pins_remove` | Unpin a message in its channel. |
+| Bookmarks | `slack_bookmarks_list` | List a channel's bookmarks. |
+| Bookmarks | `slack_bookmarks_add` | Add a bookmark to a channel. |
+| Bookmarks | `slack_bookmarks_edit` | Edit a bookmark in that channel. |
+| Bookmarks | `slack_bookmarks_remove` | Remove a bookmark from that channel. |
+| Files | `slack_files_info` | Read metadata for a file attached to an authorized message. |
+| Files | `slack_files_download` | Retrieve bounded file content from an authorized message. |
+| Files | `slack_files_upload` | Share bounded content or an approved local artifact in one channel or thread. |
+| DMs | `slack_dms_open` | Open a bot DM or group DM with authorized recipients. Use the returned conversation ID for the message and history tools. |
+
+The JSON schemas are available via MCP `tools/list`. Slack timestamps are
+strings throughout, so clients can round-trip all fractional digits. The
+bounded search uses history pages. It does not use Slack's
+[user-token search API](https://docs.slack.dev/reference/methods/search.messages/)
+or claim to search the whole workspace.
+
+## Examples
+
+Read a page with `slack_conversations_history`:
+
+~~~json
+{"channel_id":"C0123456789","limit":20}
+~~~
+
+Read the thread under a known parent with `slack_conversations_replies`:
+
+~~~json
+{"channel_id":"C0123456789","thread_ts":"1699999999.000100","limit":20}
+~~~
+
+For publishing, give `slack_chat_post_message` the channel ID and final text.
+For a reply, use the timestamp of the root message in `thread_ts`; do not
+substitute the timestamp of another reply. Save the receipt so you can verify the
+message or reply to it later. See [publishing examples](docs/configuration.md#publishing)
+for root posts, replies, and idempotency.
+
+## Security and troubleshooting
+
+The server validates destination and object ownership itself. It does not accept
+a Slack method name from the model, log message content or credentials, or
+listen on a network port. A read grant does not imply a write grant. A failed
+write with an uncertain result should be reconciled by reading the destination,
+rather than by resubmitting it with a different operation key.
+
+- **Tool missing:** check the server's capabilities and the client's tool filter.
+  Restart or reconnect the stdio client after changing the environment.
+- **Permission denied:** verify the relevant allowlist, bot membership and
+  the required Slack scope. A successful token check does not confer write access.
+- **Rate limited:** respect Slack's [rate limits and Retry-After](https://docs.slack.dev/apis/web-api/rate-limits/).
+  Prefer thread replies over posting duplicate channel messages.
+- **Upload failed:** check artifact bounds, membership and `files:write`. Uploads
+  use [files.getUploadURLExternal](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/)
+  and [files.completeUploadExternal](https://docs.slack.dev/reference/methods/files.completeUploadExternal/).
+
+See [SECURITY.md](SECURITY.md) for policy and reporting.
+
+## Develop and release
+
+The [official MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
+validates typed inputs and implements stdio. [slack-go](https://github.com/slack-go/slack)
+provides the Slack Web API client. `cmd/mcp-slack` starts the process;
+`internal/config` loads policy; `internal/mcpserver` checks tool arguments and
+authorization; `internal/slackclient` handles Slack calls and error shaping.
+There is no database to provision.
+
+~~~bash
+make test         # unit and protocol tests
+make test-race    # concurrency checks
+make check        # formatting, vet, staticcheck, tests, security scans, build
+make build        # static Linux/amd64 binary in dist/
+~~~
+
+Tests use a fake Slack API; never put workspace credentials in CI. A version
+tag runs the [release workflow](.github/workflows/release.yml), which verifies the
+source, builds the archives, writes checksums, and attests provenance. See the
+[changelog](CHANGELOG.md) and [architecture decisions](docs/adr/).
 
 ## License
 

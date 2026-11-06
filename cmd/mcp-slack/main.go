@@ -17,6 +17,7 @@ import (
 	"github.com/matheus3301/mcp-slack/internal/buildinfo"
 	"github.com/matheus3301/mcp-slack/internal/config"
 	"github.com/matheus3301/mcp-slack/internal/mcpserver"
+	"github.com/matheus3301/mcp-slack/internal/receipts"
 	"github.com/matheus3301/mcp-slack/internal/slackclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -74,7 +75,21 @@ func run() error {
 	}
 
 	api := slackclient.New(cfg.BotToken())
-	tools := &mcpserver.Tools{API: api, Allow: cfg.Allowlist()}
+	tools := &mcpserver.Tools{API: api, Allow: cfg.Allowlist(), Policy: cfg.Policy}
+	if cfg.Policy.Expanded() {
+		tools.Slack = slackclient.NewCollaboration(cfg.BotToken())
+	}
+	if cfg.Policy.Enabled("slack_chat_delete_scheduled_message") {
+		tools.Canceler = slackclient.NewScheduledCanceler(cfg.BotToken())
+	}
+	if cfg.Policy.StateDir != "" {
+		store, err := receipts.Open(cfg.Policy.StateDir)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		tools.Store = store
+	}
 	server := mcpserver.New(tools, version)
 
 	// Terminate cleanly on Ctrl-C / SIGTERM so a supervising process can stop

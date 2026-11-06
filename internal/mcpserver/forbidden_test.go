@@ -1,14 +1,17 @@
 package mcpserver
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// TestExactToolSurface pins the tool set to exactly the three read-only tools.
-// If a fourth tool is ever added, this fails loudly.
+// TestExactToolSurface pins the legacy names; protocol tests pin the default
+// three-tool catalog, the full 29-tool catalog and the exact production subset.
 func TestExactToolSurface(t *testing.T) {
 	t.Parallel()
 	want := map[string]bool{
@@ -46,23 +49,24 @@ var forbiddenVerbs = []string{
 // forbiddenSlackMethods are concrete Slack Web API methods that this server
 // must never call. The test scans all non-test .go files.
 var forbiddenSlackMethods = []string{
-	"chat.postMessage", "chat.update", "chat.delete", "chat.postEphemeral",
-	"chat.scheduleMessage", "reactions.add", "reactions.remove",
-	"conversations.mark", "conversations.join", "conversations.leave",
-	"conversations.invite", "conversations.kick", "conversations.archive",
-	"conversations.create", "conversations.rename", "conversations.list",
-	"search.messages", "search.files", "files.upload", "files.getUploadURLExternal",
-	"usergroups.create", "admin.conversations",
+	"chat.postEphemeral", "conversations.mark", "conversations.join", "conversations.leave",
+	"conversations.invite", "conversations.kick", "conversations.archive", "conversations.create",
+	"conversations.rename", "conversations.list", "search.messages", "search.files",
+	"files.upload", "files.sharedPublicURL", "usergroups.create", "admin.conversations",
+	"MsgOptionUsername", "MsgOptionIconURL", "MsgOptionIconEmoji", "MsgOptionAsUser",
+	"MsgOptionBroadcast", "MsgOptionResponseURL", "SendMessageContext",
 }
 
-// allowedSlackMethodCalls are the ONLY Slack SDK methods the server may invoke.
-// GetConversationsForUserContext maps to users.conversations, a member-scoped
-// read (not workspace enumeration like conversations.list).
+// Only fixed, reviewed SDK methods may be invoked. Cancellation uses the
+// separate narrow typed JSON adapter to avoid the SDK's legacy as_user field.
 var allowedSlackMethodCalls = []string{
-	"GetConversationInfoContext",
-	"GetConversationHistoryContext",
-	"GetConversationRepliesContext",
-	"GetConversationsForUserContext",
+	"GetConversationInfoContext", "GetConversationHistoryContext", "GetConversationRepliesContext",
+	"GetConversationsForUserContext", "AuthTestContext", "GetUsersInConversationContext", "GetUserInfoContext",
+	"GetPermalinkContext", "PostMessageContext", "UpdateMessageContext", "DeleteMessageContext",
+	"ScheduleMessageContext", "GetScheduledMessagesContext", "GetReactionsContext", "AddReactionContext",
+	"RemoveReactionContext", "ListPinsContext", "AddPinContext", "RemovePinContext", "ListBookmarksContext",
+	"AddBookmarkContext", "EditBookmarkContext", "RemoveBookmarkContext", "OpenConversationContext",
+	"GetFileInfoContext", "GetFileContext", "GetUploadURLExternalContext", "UploadToURL", "CompleteUploadExternalContext",
 }
 
 // TestNoForbiddenSlackMethodsInSource statically verifies that no write, search,
@@ -85,35 +89,37 @@ func TestNoForbiddenSlackMethodsInSource(t *testing.T) {
 	}
 }
 
-// TestOnlyAllowlistedSDKCallsInvoked verifies the Slack adapter only calls the
-// three read methods: any GetConversation*/Get*/Post* SDK call outside the
-// allowlist is flagged.
+// TestOnlyAllowlistedSDKCallsInvoked audits both adapters and handlers using
+// syntax rather than line-oriented text matching.
 func TestOnlyAllowlistedSDKCallsInvoked(t *testing.T) {
 	t.Parallel()
-	root := repoRoot(t)
-	adapter := filepath.Join(root, "internal", "slackclient", "adapter.go")
-	data, err := os.ReadFile(adapter)
-	if err != nil {
-		t.Fatalf("read adapter.go: %v", err)
-	}
-	content := string(data)
-
-	// The SDK client is referenced as a.sc.<Method>. Ensure each such call is
-	// on the allowlist.
-	for _, line := range strings.Split(content, "\n") {
-		idx := strings.Index(line, "a.sc.")
-		if idx < 0 {
-			continue
+	walk(t, repoRoot(t), func(path, content string) {
+		file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		rest := line[idx+len("a.sc."):]
-		method := rest
-		if p := strings.IndexAny(rest, "("); p >= 0 {
-			method = rest[:p]
-		}
-		if !contains(allowedSlackMethodCalls, method) {
-			t.Errorf("adapter invokes non-allowlisted SDK method: %q", method)
-		}
-	}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			receiver, ok := selector.X.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if receiver.Sel.Name != "Slack" && receiver.Sel.Name != "sc" {
+				return true
+			}
+			if !contains(allowedSlackMethodCalls, selector.Sel.Name) {
+				t.Errorf("%s invokes non-allowlisted SDK method %s", path, selector.Sel.Name)
+			}
+			return true
+		})
+	})
 }
 
 func contains(xs []string, x string) bool {
