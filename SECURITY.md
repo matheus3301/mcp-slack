@@ -1,88 +1,37 @@
-# Security Policy
+# Security policy
 
-`mcp-slack` is a deliberately small, read-only MCP server. It is designed to be
-given to an MCP client — including an autonomous, potentially prompt-injectable
-agent — while keeping the blast radius as small as possible. This document
-describes the security model and how to report issues.
+Use GitHub's [private vulnerability reporting](https://github.com/matheus3301/mcp-slack/security/advisories/new)
+for security issues. Include the affected version, minimal reproduction and
+expected behavior. Do not include Slack tokens or workspace message content.
 
-## Reporting a vulnerability
+## Boundaries
 
-Please **do not** open a public issue for security problems. Instead, use
-GitHub's private vulnerability reporting on this repository
-(**Security → Report a vulnerability**), or contact the maintainer directly.
-Include reproduction steps and the affected version/commit.
+Treat an MCP client as potentially exposed to prompt injection. Authorization
+is checked at the server, independently of model instructions and client trust.
 
-## Design guarantees
-
-The server is built so that the following hold by construction, not by policy:
-
-1. **Read-only surface.** Exactly three tools are exposed, all of which map to
-   Slack *read* methods (`conversations.info`, `conversations.history`,
-   `conversations.replies`). There is no tool — and no code path — that posts,
-   edits, deletes, reacts, marks as read, uploads, searches, manages
-   usergroups, or calls an arbitrary Slack method. A regression test
-   (`internal/mcpserver/forbidden_test.go`) statically fails the build if a
-   forbidden method or a fourth tool ever appears.
-
-2. **Bot token only.** The token is read once from `SLACK_BOT_TOKEN` and must
-   begin with `xoxb-`. User tokens (`xoxp-`), browser/session tokens
-   (`xoxc-`/`xoxd-`), and app-level tokens (`xoxa-`) are rejected at startup.
-
-3. **Channel allowlist.** Every read is gated by `SLACK_READ_ALLOWED_CHANNELS`.
-   It is either an explicit, comma-separated list of channel IDs or the single
-   literal `*`. Only `C…` and `G…` IDs are accepted; direct messages (`D…`) are
-   rejected by format, and a defense-in-depth check refuses any channel Slack
-   reports as an IM/MPIM. The workspace is never enumerated. In explicit mode,
-   metadata is fetched one ID at a time. In wildcard (`*`) mode the server reads
-   only channels the bot currently belongs to: history and replies verify
-   membership against Slack before returning content, and listing uses the
-   member-scoped `users.conversations` API rather than a workspace listing. A
-   non-member channel is never returned.
-
-4. **Fail closed.** A missing/invalid token or an empty/invalid allowlist is a
-   fatal startup error. `*` combined with any ID is rejected. The process never
-   starts in a degraded, "allow all" mode; wildcard still means member-only.
-
-5. **No secret leakage.** The token is never logged and never included in any
-   error returned to the MCP client. Slack and transport errors are collapsed
-   to a fixed set of stable error codes (e.g. `CHANNEL_NOT_FOUND`,
-   `PERMISSION_DENIED`, `RATE_LIMITED`); raw HTTP bodies, headers, URLs, and
-   stack traces are never surfaced.
-
-6. **No persistence.** Message bodies are streamed through to the caller and are
-   never cached, persisted, or logged.
-
-7. **Bounded work.** Page sizes are clamped to `1..100`. Rate-limit (HTTP 429)
-   responses are retried a small, fixed number of times with a hard cap on the
-   honored `Retry-After`; the server never sleeps unboundedly. All Slack calls
-   respect context cancellation/timeouts.
-
-8. **Stdio only.** The server speaks MCP over stdin/stdout. It opens no network
-   listener of its own.
-
-## Threat model (summary)
-
-| Threat | Mitigation |
+| Risk | Server boundary |
 | --- | --- |
-| Compromised/over-scoped token | Bot token only; grant only `channels:read`, `groups:read`, `channels:history`, `groups:history` |
-| Agent asked to read a sensitive channel | Allowlist gate: in explicit mode the ID must be listed; in wildcard mode the bot must be a member, verified per request |
-| Wildcard reading a channel after the bot is removed | Membership is checked against Slack on every history/replies request, so access ends when the bot leaves |
-| Prompt-injection tricking the agent into writing to Slack | No write tool exists in this server |
-| Data exfiltration via error strings | Errors sanitized to fixed codes; no token or raw payload in errors |
-| Runaway pagination / DoS on Slack | Page size clamp, bounded retries, context timeouts |
-| Supply-chain drift | Dependencies pinned in `go.mod`/`go.sum`; CI runs `govulncheck` and `gosec`; GitHub Actions pinned to commit SHAs |
+| Token grants a human's Slack access | Accept a bot token only. Reject user and browser tokens. |
+| A readable channel becomes a write target | Write access requires a separate explicit channel allowlist. There is no write wildcard. |
+| Channel IDs route to DMs or groups | Verify the conversation type and membership with Slack. DMs require separate capability and participant grants. |
+| Editing another author's message or reusing a foreign resource | Verify the destination and ownership or channel association before mutating it. |
+| Retrying an uncertain post, schedule or upload | Persist an operation key and receipt metadata; reconcile ambiguous outcomes rather than repeating them. |
+| Malicious file paths or URLs | Bound file size, reject caller-provided fetch URLs, and resolve upload paths within the approved artifact root. |
+| Leaking Slack credentials or content | Sanitize upstream errors; keep tokens and message/file bodies out of logs and receipt storage. |
+| Calling arbitrary Slack methods | Register a fixed typed catalog over stdio. No generic method proxy or network listener. |
 
-## Known residual findings
+The app still has the Slack scopes granted at installation. Restrict those scopes
+and invite the bot only where needed. A client using the same bot token by some
+other path is outside this server's policy.
 
-- **govulncheck:** `GO-2026-5024` (`golang.org/x/sys` integer overflow in
-  `NewNTUnicodeString`) appears as a *required-module* vulnerability but is
-  **not called** — it is Windows-only code and this server targets Linux/macOS.
-  It will clear on the next `golang.org/x/sys` bump.
-- **gosec G101** on the `SLACK_BOT_TOKEN` constant is a false positive (the
-  constant is the environment-variable *name*, not a secret) and is annotated
-  with a justified `#nosec G101`.
+## Operating the server
 
-## Supported versions
+Use the `read` capability unless a deployment needs additional
+capabilities. Keep the receipt directory private and persistent if writes need to
+survive restarts. Do not share the process environment or diagnostic dumps with
+untrusted clients. Keep write tools behind client approvals appropriate to your
+workspace; annotations are descriptive rather than an authorization boundary.
 
-This project tracks `main`. Security fixes are applied to `main` and released as
-new tags.
+Run `make check` before publishing a version and verify its checksum and
+attestation before installing. Report vulnerabilities on the latest supported
+release or the default branch.

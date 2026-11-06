@@ -1,8 +1,6 @@
-// Package mcpserver wires the three read-only Slack tools onto an MCP server.
-//
-// The entire tool surface is fixed at compile time: exactly three tools, all
-// annotated read-only and non-destructive. There is no dynamic method proxy and
-// no path by which a caller can reach an un-enumerated Slack API method.
+// Package mcpserver registers a fixed Slack tool catalog behind independent
+// capability and destination policies. Every operation uses the same identity
+// and membership authorization. No arbitrary Slack method proxy is exposed.
 package mcpserver
 
 import (
@@ -10,12 +8,13 @@ import (
 	"fmt"
 
 	"github.com/matheus3301/mcp-slack/internal/config"
+	"github.com/matheus3301/mcp-slack/internal/receipts"
 	"github.com/matheus3301/mcp-slack/internal/slackclient"
 	"github.com/matheus3301/mcp-slack/internal/validate"
+	"github.com/slack-go/slack"
 )
 
-// Tool names. These are the only tool identifiers the server exposes and are
-// asserted by the regression test that forbids write/search tooling.
+// Tool names in the explicit read capability group.
 const (
 	ToolChannelsList = "slack_channels_list"
 	ToolHistory      = "slack_conversations_history"
@@ -26,8 +25,12 @@ const (
 // concurrent use: API implementations are expected to be concurrency-safe and
 // the allowlist is immutable.
 type Tools struct {
-	API   slackclient.API
-	Allow config.Allowlist
+	API      slackclient.API
+	Allow    config.Allowlist
+	Policy   config.Policy
+	Slack    *slack.Client
+	Store    *receipts.Store
+	Canceler slackclient.ScheduledCanceler
 }
 
 // ---- slack_channels_list ----
@@ -66,6 +69,9 @@ func (t *Tools) ChannelsList(ctx context.Context, in ChannelsListInput) (Channel
 // policy, membership, and the DM/MPIM ban. A requested channel the bot has not
 // joined is a hard error, so the caller gets a clear signal.
 func (t *Tools) channelsByID(ctx context.Context, ids []string) (ChannelsListOutput, error) {
+	if len(ids) > 100 {
+		return ChannelsListOutput{}, invalid()
+	}
 	seen := make(map[string]struct{}, len(ids))
 	out := ChannelsListOutput{Channels: make([]slackclient.ChannelMeta, 0, len(ids))}
 	for _, id := range ids {
@@ -79,21 +85,14 @@ func (t *Tools) channelsByID(ctx context.Context, ids []string) (ChannelsListOut
 			continue
 		}
 		seen[id] = struct{}{}
-
-		meta, err := t.API.ConversationInfo(ctx, id)
+		meta, err := t.info(ctx, ChannelInput{id})
 		if err != nil {
-			return ChannelsListOutput{}, err // already sanitized
-		}
-		if meta == nil {
-			return ChannelsListOutput{}, slackclient.NewError(slackclient.CodeUpstreamError, "empty channel metadata")
+			return ChannelsListOutput{}, err
 		}
 		if meta.IsIM || meta.IsMpIM {
-			return ChannelsListOutput{}, slackclient.NewError(slackclient.CodePermissionDenied, "direct and multi-party messages are not permitted")
+			return ChannelsListOutput{}, denied()
 		}
-		if !meta.IsMember {
-			return ChannelsListOutput{}, slackclient.NewError(slackclient.CodeNotInChannel, "the bot is not a member of the requested channel")
-		}
-		out.Channels = append(out.Channels, *meta)
+		out.Channels = append(out.Channels, meta)
 	}
 	return out, nil
 }
@@ -109,6 +108,9 @@ func (t *Tools) channelsForMember(ctx context.Context, limit int, cursor string)
 		return ChannelsListOutput{}, slackclient.NewError(slackclient.CodeInvalidRequest, err.Error())
 	}
 
+	if _, err := t.identity(ctx); err != nil {
+		return ChannelsListOutput{}, err
+	}
 	page, err := t.API.MemberChannels(ctx, slackclient.ListParams{Limit: norm, Cursor: cursor})
 	if err != nil {
 		return ChannelsListOutput{}, err // already sanitized
@@ -123,6 +125,14 @@ func (t *Tools) channelsForMember(ctx context.Context, limit int, cursor string)
 		if c.IsIM || c.IsMpIM || !c.IsMember {
 			continue
 		}
+		meta, err := t.info(ctx, ChannelInput{c.ID})
+		if err != nil {
+			return ChannelsListOutput{}, err
+		}
+		if meta.IsIM || meta.IsMpIM {
+			return ChannelsListOutput{}, denied()
+		}
+		c = meta
 		out.Channels = append(out.Channels, c)
 	}
 	return out, nil
@@ -142,14 +152,11 @@ type HistoryInput struct {
 
 // History returns bounded message history for one allowlisted channel.
 func (t *Tools) History(ctx context.Context, in HistoryInput) (slackclient.Page, error) {
-	if err := t.requireAllowed(in.ChannelID); err != nil {
+	if _, _, err := t.authorize(ctx, in.ChannelID, false); err != nil {
 		return slackclient.Page{}, err
 	}
 	limit, err := t.validateWindow(in.Limit, in.Cursor, in.Oldest, in.Latest)
 	if err != nil {
-		return slackclient.Page{}, err
-	}
-	if err := t.requireMembership(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 
@@ -182,7 +189,7 @@ type RepliesInput struct {
 
 // Replies returns bounded replies for one thread in an allowlisted channel.
 func (t *Tools) Replies(ctx context.Context, in RepliesInput) (slackclient.Page, error) {
-	if err := t.requireAllowed(in.ChannelID); err != nil {
+	if _, _, err := t.authorize(ctx, in.ChannelID, false); err != nil {
 		return slackclient.Page{}, err
 	}
 	if err := validate.RequiredTimestamp(in.ThreadTS); err != nil {
@@ -190,9 +197,6 @@ func (t *Tools) Replies(ctx context.Context, in RepliesInput) (slackclient.Page,
 	}
 	limit, err := t.validateWindow(in.Limit, in.Cursor, in.Oldest, in.Latest)
 	if err != nil {
-		return slackclient.Page{}, err
-	}
-	if err := t.requireMembership(ctx, in.ChannelID); err != nil {
 		return slackclient.Page{}, err
 	}
 
@@ -212,41 +216,6 @@ func (t *Tools) Replies(ctx context.Context, in RepliesInput) (slackclient.Page,
 }
 
 // ---- shared validation ----
-
-// requireAllowed enforces both format and allowlist policy for a channel.
-func (t *Tools) requireAllowed(channelID string) error {
-	if err := validate.ChannelID(channelID); err != nil {
-		return slackclient.NewError(slackclient.CodeInvalidRequest, err.Error())
-	}
-	if !t.Allow.Allowed(channelID) {
-		return slackclient.NewError(slackclient.CodePermissionDenied, "channel is not in the read allowlist")
-	}
-	return nil
-}
-
-// requireMembership verifies, in wildcard mode, that the bot belongs to the
-// channel before any content is read. It also rejects DMs and MPIMs. In
-// explicit mode it is a no-op: the operator curated the allowlist, and Slack
-// still returns NOT_IN_CHANNEL (sanitized) if the bot is not a member.
-func (t *Tools) requireMembership(ctx context.Context, channelID string) error {
-	if !t.Allow.Wildcard() {
-		return nil
-	}
-	meta, err := t.API.ConversationInfo(ctx, channelID)
-	if err != nil {
-		return err // already sanitized (e.g. CHANNEL_NOT_FOUND for private channels)
-	}
-	if meta == nil {
-		return slackclient.NewError(slackclient.CodeUpstreamError, "empty channel metadata")
-	}
-	if meta.IsIM || meta.IsMpIM {
-		return slackclient.NewError(slackclient.CodePermissionDenied, "direct and multi-party messages are not permitted")
-	}
-	if !meta.IsMember {
-		return slackclient.NewError(slackclient.CodeNotInChannel, "the bot is not a member of the requested channel")
-	}
-	return nil
-}
 
 // validateWindow validates and normalizes the common paging window arguments.
 func (t *Tools) validateWindow(limit int, cursor, oldest, latest string) (int, error) {

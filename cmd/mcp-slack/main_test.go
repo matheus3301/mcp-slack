@@ -22,6 +22,8 @@ func TestRun_FailsClosedWithoutToken(t *testing.T) {
 }
 
 func TestRun_FailsClosedWithoutAllowlist(t *testing.T) {
+	t.Setenv("SLACK_CAPABILITIES", "read")
+	t.Setenv("SLACK_EXPECTED_TEAM_ID", "T01234567")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-1234567890-abcdefghijklmnop")
 	t.Setenv("SLACK_READ_ALLOWED_CHANNELS", "")
 

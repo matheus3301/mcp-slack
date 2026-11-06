@@ -15,8 +15,10 @@ const goodToken = "xoxb-1234567890-abcdefghijklmnop"
 func TestLoad_Success(t *testing.T) {
 	t.Parallel()
 	cfg, err := Load(fakeEnv(map[string]string{
-		EnvBotToken:        goodToken,
-		EnvAllowedChannels: "C01234567, G0ABCDEFG ,C01234567", // trailing dup + whitespace
+		"SLACK_CAPABILITIES":     "read",
+		"SLACK_EXPECTED_TEAM_ID": "T01234567",
+		EnvBotToken:              goodToken,
+		EnvAllowedChannels:       "C01234567, G0ABCDEFG ,C01234567", // trailing dup + whitespace
 	}))
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -49,8 +51,10 @@ func TestLoad_TokenRejections(t *testing.T) {
 	for name, tok := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(fakeEnv(map[string]string{
-				EnvBotToken:        tok,
-				EnvAllowedChannels: "C01234567",
+				"SLACK_CAPABILITIES":     "read",
+				"SLACK_EXPECTED_TEAM_ID": "T01234567",
+				EnvBotToken:              tok,
+				EnvAllowedChannels:       "C01234567",
 			}))
 			if err == nil {
 				t.Fatalf("expected error for %s token", name)
@@ -76,8 +80,10 @@ func TestLoad_AllowlistRejections(t *testing.T) {
 	for name, allow := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(fakeEnv(map[string]string{
-				EnvBotToken:        goodToken,
-				EnvAllowedChannels: allow,
+				"SLACK_CAPABILITIES":     "read",
+				"SLACK_EXPECTED_TEAM_ID": "T01234567",
+				EnvBotToken:              goodToken,
+				EnvAllowedChannels:       allow,
 			}))
 			if err == nil {
 				t.Fatalf("expected error for allowlist %q", allow)
@@ -90,8 +96,10 @@ func TestLoad_WildcardOnly(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"*", "  *  "} {
 		cfg, err := Load(fakeEnv(map[string]string{
-			EnvBotToken:        goodToken,
-			EnvAllowedChannels: raw,
+			"SLACK_CAPABILITIES":     "read",
+			"SLACK_EXPECTED_TEAM_ID": "T01234567",
+			EnvBotToken:              goodToken,
+			EnvAllowedChannels:       raw,
 		}))
 		if err != nil {
 			t.Fatalf("Load(%q) error: %v", raw, err)
@@ -114,8 +122,10 @@ func TestLoad_WildcardMixedIsInvalid(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"*,C01234567", "C01234567,*", "*, *", "*,*"} {
 		_, err := Load(fakeEnv(map[string]string{
-			EnvBotToken:        goodToken,
-			EnvAllowedChannels: raw,
+			"SLACK_CAPABILITIES":     "read",
+			"SLACK_EXPECTED_TEAM_ID": "T01234567",
+			EnvBotToken:              goodToken,
+			EnvAllowedChannels:       raw,
 		}))
 		if err == nil {
 			t.Errorf("Load(%q) must reject '*' combined with other tokens", raw)
@@ -127,8 +137,10 @@ func TestLoad_EmptyAllowlistStillFailsClosed(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"", "   ", ",, ,"} {
 		if _, err := Load(fakeEnv(map[string]string{
-			EnvBotToken:        goodToken,
-			EnvAllowedChannels: raw,
+			"SLACK_CAPABILITIES":     "read",
+			"SLACK_EXPECTED_TEAM_ID": "T01234567",
+			EnvBotToken:              goodToken,
+			EnvAllowedChannels:       raw,
 		})); err == nil {
 			t.Errorf("Load(%q) must fail closed", raw)
 		}
