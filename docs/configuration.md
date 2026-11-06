@@ -1,7 +1,7 @@
 # Configuration and examples
 
 A deployment can grant reads, channel writes, or bot DMs independently.
-Start with the existing read-only configuration and enable only the tools the
+Start with a read-only configuration and enable only the tools the
 client needs. Every example uses placeholder IDs.
 
 ## Environment
@@ -9,11 +9,11 @@ client needs. Every example uses placeholder IDs.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SLACK_BOT_TOKEN` | Required | Installed app's bot token, supplied from the environment. |
-| `SLACK_READ_ALLOWED_CHANNELS` | Required | Explicit channel IDs, or the single literal `*` for current member channels. |
-| `SLACK_CAPABILITIES` | `legacy_read` | Comma-separated groups listed below. Include `legacy_read` to keep the original three tools. |
+| `SLACK_READ_ALLOWED_CHANNELS` | No channel reads | Explicit channel IDs, or the single literal `*` for current member channels. Required for the `read` group. |
+| `SLACK_CAPABILITIES` | Required | Comma-separated groups listed below. Use `read` for the three channel-reading tools. |
 | `SLACK_ENABLED_TOOLS` | All tools in selected groups | An optional comma-separated subset of the selected groups' exact tool names. |
 | `SLACK_WRITE_ALLOWED_CHANNELS` | No channel writes | Comma-separated explicit public/private channel IDs. No wildcards, users or DM IDs. |
-| `SLACK_EXPECTED_TEAM_ID` | Required for expanded capabilities | Slack workspace ID, beginning with `T`. |
+| `SLACK_EXPECTED_TEAM_ID` | Required | Slack workspace ID, beginning with `T`. |
 | `SLACK_EXPECTED_BOT_ID` | Unset | Expected Slack bot ID (beginning with `B`), checked against the token. |
 | `SLACK_DM_ALLOWED_USERS` | None | Explicit Slack user IDs. All human recipients of a DM/MPIM must be listed. |
 | `SLACK_DM_READ_ENABLED`, `SLACK_DM_WRITE_ENABLED` | `false` | Independent grants for one-to-one bot conversations; require `dms` and the user allowlist. |
@@ -21,7 +21,7 @@ client needs. Every example uses placeholder IDs.
 | `SLACK_STATE_DIR` | Unset | Absolute path to a private, persistent directory for post, schedule and upload receipts. Required when those tools are enabled. |
 | `SLACK_ARTIFACT_ROOT` | Unset | Optional absolute root for upload paths. Only approved artifacts belong here. |
 
-The capability groups are `legacy_read`, `diagnostics`, `conversations`,
+The capability groups are `read`, `diagnostics`, `conversations`,
 `discovery`, `messages`, `schedule`, `reactions`, `pins`, `bookmarks`,
 `files`, and `dms`. See the [tool catalog](../README.md#tool-catalog) for names
 and the [scope table](../README.md#set-up-a-slack-app) for Slack permissions.
@@ -103,7 +103,7 @@ read tools you need. Grant only the test recipients, then enable the operation
 and conversation types explicitly:
 
 ~~~dotenv
-SLACK_CAPABILITIES=legacy_read,diagnostics,messages,dms
+SLACK_CAPABILITIES=read,diagnostics,messages,dms
 SLACK_EXPECTED_TEAM_ID=T0123456789
 SLACK_DM_ALLOWED_USERS=U0123456789,U0987654321
 SLACK_DM_READ_ENABLED=true
@@ -145,8 +145,8 @@ To upload from disk, use a relative `artifact_path` instead of
 
 ## Upgrade or roll back
 
-An unchanged v0.2.0 configuration still exposes exactly three read tools.
-Before enabling writes, verify the new binary's checksum and provenance, start
+For a read-only deployment, set `SLACK_CAPABILITIES=read`, the workspace ID,
+and the read allowlist. Before enabling writes, verify the new binary's checksum and provenance, start
 a separate stdio registration with the intended capability list, and compare
 `tools/list` and `slack_auth_test` to your expected policy. Test writes in a
 sandbox before enabling them for an operational channel. To roll back,

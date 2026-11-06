@@ -14,8 +14,8 @@ func readOnlyAnnotations(title string) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, DestructiveHint: &destructive, OpenWorldHint: &openWorld}
 }
 
-// New registers only the configured subset of the static catalog. Zero-value
-// policy is deliberately the v0.2.0 three-tool catalog.
+// New registers only the explicitly configured subset of the static catalog.
+// A zero-value policy registers no tools.
 func New(t *Tools, version string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: version}, nil)
 	addTool(s, t, ToolChannelsList, "List metadata for readable member channels; never enumerate the workspace.", true, t.ChannelsList)

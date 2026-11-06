@@ -13,7 +13,7 @@ import (
 // method names or implicit dependencies can be registered through configuration.
 func ToolGroups() map[string][]string {
 	return map[string][]string{
-		"legacy_read":   {"slack_channels_list", "slack_conversations_history", "slack_conversations_replies"},
+		"read":          {"slack_channels_list", "slack_conversations_history", "slack_conversations_replies"},
 		"diagnostics":   {"slack_auth_test"},
 		"conversations": {"slack_conversations_info", "slack_conversations_members"},
 		"discovery":     {"slack_chat_get_permalink", "slack_users_info", "slack_messages_search"},
@@ -27,7 +27,7 @@ func ToolGroups() map[string][]string {
 	}
 }
 
-// Policy is immutable after startup. Zero value preserves the legacy catalog.
+// Policy is immutable after startup. Its zero value enables no tools.
 type Policy struct {
 	Write                                 Allowlist
 	TeamID, BotID, StateDir, ArtifactRoot string
@@ -38,12 +38,8 @@ type Policy struct {
 }
 
 func (p Policy) Enabled(name string) bool {
-	if p.tools == nil {
-		return name == "slack_channels_list" || name == "slack_conversations_history" || name == "slack_conversations_replies"
-	}
 	return p.tools[name]
 }
-func (p Policy) Expanded() bool             { return p.TeamID != "" }
 func (p Policy) UserAllowed(id string) bool { return p.users[id] }
 func (p Policy) ToolNames() []string {
 	var names []string
@@ -58,9 +54,6 @@ func (p Policy) ToolNames() []string {
 	return names
 }
 func (p Policy) Capabilities() []string {
-	if p.groups == nil {
-		return []string{"legacy_read"}
-	}
 	return append([]string{}, p.groups...)
 }
 
@@ -84,7 +77,7 @@ func loadPolicy(getenv func(string) string) (Policy, error) {
 	p := Policy{users: map[string]bool{}}
 	raw := strings.TrimSpace(getenv("SLACK_CAPABILITIES"))
 	if raw == "" {
-		raw = "legacy_read"
+		return p, fmt.Errorf("SLACK_CAPABILITIES is required")
 	}
 	groups, err := csv(raw)
 	if err != nil {
@@ -93,7 +86,6 @@ func loadPolicy(getenv func(string) string) (Policy, error) {
 	catalog := ToolGroups()
 	p.tools = map[string]bool{}
 	seen := map[string]bool{}
-	expanded := false
 	for _, group := range groups {
 		names, ok := catalog[group]
 		if !ok {
@@ -102,9 +94,6 @@ func loadPolicy(getenv func(string) string) (Policy, error) {
 		if !seen[group] {
 			p.groups = append(p.groups, group)
 			seen[group] = true
-		}
-		if group != "legacy_read" {
-			expanded = true
 		}
 		for _, n := range names {
 			p.tools[n] = true
@@ -162,18 +151,14 @@ func loadPolicy(getenv func(string) string) (Policy, error) {
 		}
 	}
 	if p.DMRead || p.DMWrite || p.MPIMRead || p.MPIMWrite {
-		expanded = true
 		if !seen["dms"] || len(p.users) == 0 {
 			return p, fmt.Errorf("DM permissions require dms capability and SLACK_DM_ALLOWED_USERS")
 		}
 	}
 	p.TeamID = strings.TrimSpace(getenv("SLACK_EXPECTED_TEAM_ID"))
 	p.BotID = strings.TrimSpace(getenv("SLACK_EXPECTED_BOT_ID"))
-	if expanded && !validID(p.TeamID, "T") {
-		return p, fmt.Errorf("expanded capabilities require SLACK_EXPECTED_TEAM_ID")
-	}
-	if p.TeamID != "" && !validID(p.TeamID, "T") {
-		return p, fmt.Errorf("invalid SLACK_EXPECTED_TEAM_ID")
+	if !validID(p.TeamID, "T") {
+		return p, fmt.Errorf("SLACK_EXPECTED_TEAM_ID is required and must be a T... Slack ID")
 	}
 	if p.BotID != "" && !validID(p.BotID, "B") {
 		return p, fmt.Errorf("invalid SLACK_EXPECTED_BOT_ID")
@@ -198,7 +183,7 @@ func loadPolicy(getenv func(string) string) (Policy, error) {
 
 // CheckPlatform deliberately refuses writes on Windows until receipt ACLs,
 // directory durability and race-safe file opening have a native implementation.
-// The default legacy catalog and optional read/diagnostic tools remain usable.
+// Explicitly configured read and diagnostic tools remain usable.
 func (p Policy) CheckPlatform(goos string) error {
 	if goos != "windows" {
 		return nil
@@ -206,7 +191,7 @@ func (p Policy) CheckPlatform(goos string) error {
 	for _, name := range p.ToolNames() {
 		switch name {
 		case "slack_chat_post_message", "slack_chat_update", "slack_chat_delete", "slack_chat_schedule_message", "slack_chat_delete_scheduled_message", "slack_reactions_add", "slack_reactions_remove", "slack_pins_add", "slack_pins_remove", "slack_bookmarks_add", "slack_bookmarks_edit", "slack_bookmarks_remove", "slack_files_upload", "slack_dms_open":
-			return fmt.Errorf("expanded Slack writes are unsupported on Windows; legacy reads remain available")
+			return fmt.Errorf("writes to Slack are unsupported on Windows; read capabilities remain available")
 		}
 	}
 	if p.StateDir != "" || p.DMWrite || p.MPIMWrite {

@@ -41,16 +41,6 @@ func (t *Tools) identity(ctx context.Context) (*slack.AuthTestResponse, error) {
 	}
 	return a, nil
 }
-func (t *Tools) requireRead(ctx context.Context, id string) error {
-	if t.Policy.Expanded() {
-		_, _, e := t.authorize(ctx, id, false)
-		return e
-	}
-	if e := t.requireAllowed(id); e != nil {
-		return e
-	}
-	return t.requireMembership(ctx, id)
-}
 func (t *Tools) authorize(ctx context.Context, id string, write bool) (*slack.Channel, *slack.AuthTestResponse, error) {
 	if !validID(id, "CGD") {
 		return nil, nil, invalid()

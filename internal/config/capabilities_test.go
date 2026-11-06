@@ -7,15 +7,18 @@ import (
 	"testing"
 )
 
-func TestCapabilityDefaultsAndExactFilter(t *testing.T) {
-	env := map[string]string{EnvBotToken: "xoxb-synthetic-test-token", EnvAllowedChannels: "C01234567"}
+func TestExplicitReadAndExactFilter(t *testing.T) {
+	env := map[string]string{EnvBotToken: "xoxb-synthetic-test-token", EnvAllowedChannels: "C01234567", "SLACK_CAPABILITIES": "read", "SLACK_EXPECTED_TEAM_ID": "T01234567"}
 	load := func() (*Config, error) { return Load(func(k string) string { return env[k] }) }
 	c, e := load()
 	if e != nil {
 		t.Fatal(e)
 	}
 	if len(c.Policy.ToolNames()) != 3 || c.Policy.Write.Len() != 0 {
-		t.Fatal("default expanded authority")
+		t.Fatal("read group must enable exactly three read tools")
+	}
+	if e = c.Policy.CheckPlatform("windows"); e != nil {
+		t.Fatal("explicit Windows reads failed")
 	}
 	env["SLACK_CAPABILITIES"] = "messages,diagnostics,schedule"
 	env["SLACK_ENABLED_TOOLS"] = "slack_chat_post_message,slack_auth_test,slack_chat_update,slack_chat_schedule_message,slack_chat_scheduled_messages_list,slack_chat_delete_scheduled_message"
@@ -36,9 +39,6 @@ func TestCapabilityDefaultsAndExactFilter(t *testing.T) {
 	}
 	if e = c.Policy.CheckPlatform("windows"); e == nil || !strings.Contains(e.Error(), "unsupported on Windows") {
 		t.Fatal("writes must fail on Windows")
-	}
-	if e = (Policy{}).CheckPlatform("windows"); e != nil {
-		t.Fatal("legacy Windows failed")
 	}
 }
 func TestCapabilityConfigurationDenials(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCapabilityConfigurationDenials(t *testing.T) {
 	}
 }
 func TestDMCapabilitiesRequireSeparatePermissions(t *testing.T) {
-	env := map[string]string{EnvBotToken: "xoxb-synthetic-test-token", EnvAllowedChannels: "C01234567", "SLACK_CAPABILITIES": "legacy_read,dms", "SLACK_EXPECTED_TEAM_ID": "T01234567"}
+	env := map[string]string{EnvBotToken: "xoxb-synthetic-test-token", EnvAllowedChannels: "C01234567", "SLACK_CAPABILITIES": "read,dms", "SLACK_EXPECTED_TEAM_ID": "T01234567"}
 	c, e := Load(func(k string) string { return env[k] })
 	if e != nil {
 		t.Fatal(e)
@@ -82,5 +82,31 @@ func TestDMCapabilitiesRequireSeparatePermissions(t *testing.T) {
 	}
 	if !c.Policy.DMRead || c.Policy.DMWrite || c.Policy.MPIMRead {
 		t.Fatal("DM grant expanded to other modes")
+	}
+}
+
+func TestExplicitCapabilitiesAndWorkspaceRequired(t *testing.T) {
+	for _, group := range []string{"read", "diagnostics", "conversations", "discovery"} {
+		env := map[string]string{EnvBotToken: goodToken, EnvAllowedChannels: "C01234567", "SLACK_CAPABILITIES": group, "SLACK_EXPECTED_TEAM_ID": "T01234567"}
+		for _, key := range []string{"SLACK_CAPABILITIES", "SLACK_EXPECTED_TEAM_ID"} {
+			for _, value := range []string{"", "   "} {
+				t.Run(group+"/"+key+"/"+value, func(t *testing.T) {
+					original := env[key]
+					env[key] = value
+					defer func() { env[key] = original }()
+					if _, e := Load(fakeEnv(env)); e == nil || !strings.Contains(e.Error(), key) {
+						t.Fatalf("missing explicit config accepted: %v", e)
+					}
+				})
+			}
+		}
+	}
+	env := map[string]string{EnvBotToken: goodToken, EnvAllowedChannels: "C01234567", "SLACK_CAPABILITIES": "legacy_read", "SLACK_EXPECTED_TEAM_ID": "T01234567"}
+	if _, e := Load(fakeEnv(env)); e == nil {
+		t.Fatal("removed capability alias accepted")
+	}
+	var empty Policy
+	if len(empty.ToolNames()) != 0 || len(empty.Capabilities()) != 0 || empty.Enabled("slack_channels_list") {
+		t.Fatal("zero policy enabled a fallback catalog")
 	}
 }

@@ -72,7 +72,7 @@ func newCollaborationFixture(t *testing.T) *collaborationFixture {
 	f := &collaborationFixture{overrides: map[string]func(http.ResponseWriter, *http.Request){}}
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.server.Close)
-	f.env = map[string]string{"SLACK_BOT_TOKEN": "xoxb-synthetic-test-token", "SLACK_READ_ALLOWED_CHANNELS": fixtureChannel, "SLACK_WRITE_ALLOWED_CHANNELS": fixtureChannel, "SLACK_EXPECTED_TEAM_ID": fixtureTeam, "SLACK_EXPECTED_BOT_ID": fixtureBot, "SLACK_CAPABILITIES": "legacy_read,diagnostics,conversations,discovery,messages,schedule,reactions,pins,bookmarks,files,dms", "SLACK_STATE_DIR": filepath.Join(t.TempDir(), "receipts"), "SLACK_ARTIFACT_ROOT": t.TempDir(), "SLACK_DM_READ_ENABLED": "true", "SLACK_DM_WRITE_ENABLED": "true", "SLACK_MPIM_READ_ENABLED": "true", "SLACK_MPIM_WRITE_ENABLED": "true", "SLACK_DM_ALLOWED_USERS": fixtureHuman + ",U02345678"}
+	f.env = map[string]string{"SLACK_BOT_TOKEN": "xoxb-synthetic-test-token", "SLACK_READ_ALLOWED_CHANNELS": fixtureChannel, "SLACK_WRITE_ALLOWED_CHANNELS": fixtureChannel, "SLACK_EXPECTED_TEAM_ID": fixtureTeam, "SLACK_EXPECTED_BOT_ID": fixtureBot, "SLACK_CAPABILITIES": "read,diagnostics,conversations,discovery,messages,schedule,reactions,pins,bookmarks,files,dms", "SLACK_STATE_DIR": filepath.Join(t.TempDir(), "receipts"), "SLACK_ARTIFACT_ROOT": t.TempDir(), "SLACK_DM_READ_ENABLED": "true", "SLACK_DM_WRITE_ENABLED": "true", "SLACK_MPIM_READ_ENABLED": "true", "SLACK_MPIM_WRITE_ENABLED": "true", "SLACK_DM_ALLOWED_USERS": fixtureHuman + ",U02345678"}
 	f.configure(t)
 	return f
 }

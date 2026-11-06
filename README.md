@@ -5,9 +5,9 @@ clients. Read channel history and threads, or opt into posting, scheduling,
 reactions, pins, bookmarks, files, and direct messages. The client talks to a Go
 subprocess over stdio; every Slack action uses the identity of your installed bot.
 
-The default configuration exposes the same three read tools as v0.2.0. Reading
-a channel does not authorize writing to it. Write grants name channel IDs
-explicitly, and direct messages have a separate policy.
+Choose the capabilities each client needs. A read-only instance can expose just
+channel metadata, history, and thread replies. Writes require a separate channel
+grant, and direct messages have their own recipient policy.
 
 - [Install](#install)
 - [Set up a Slack app](#set-up-a-slack-app)
@@ -81,6 +81,8 @@ mcp_servers:
     transport: stdio
     env:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_EXPECTED_TEAM_ID: "T0123456789"
+      SLACK_CAPABILITIES: "read"
       SLACK_READ_ALLOWED_CHANNELS: "C0123456789,C0987654321"
 ~~~
 
@@ -105,14 +107,14 @@ environment reference, including channel publishing and a test DM setup.
 
 ## Tool catalog
 
-These are the 29 tools available across configurations. The first three tools
-in **Legacy reads** are the only tools registered with a v0.2.0 configuration.
+These are the 29 tools available across capability groups. To expose only the
+three channel-reading tools, set `SLACK_CAPABILITIES=read`.
 
 | Group | Tool | What it does |
 | --- | --- | --- |
-| Legacy reads | `slack_channels_list` | List allowed member channels. |
-| Legacy reads | `slack_conversations_history` | Read a bounded page of conversation history. |
-| Legacy reads | `slack_conversations_replies` | Read a bounded page of thread replies. |
+| Read | `slack_channels_list` | List allowed member channels. |
+| Read | `slack_conversations_history` | Read a bounded page of conversation history. |
+| Read | `slack_conversations_replies` | Read a bounded page of thread replies. |
 | Diagnostics | `slack_auth_test` | Identify the connected workspace and bot. |
 | Conversation lookup | `slack_conversations_info` | Get metadata for an allowed conversation. |
 | Conversation lookup | `slack_conversations_members` | Page through members of an allowed conversation. |

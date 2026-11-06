@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// TestExactToolSurface pins the legacy names; protocol tests pin the default
-// three-tool catalog, the full 29-tool catalog and the exact production subset.
+// TestExactToolSurface pins the read group names; protocol tests pin the
+// three-tool read catalog, full 29-tool catalog and exact production subset.
 func TestExactToolSurface(t *testing.T) {
 	t.Parallel()
 	want := map[string]bool{

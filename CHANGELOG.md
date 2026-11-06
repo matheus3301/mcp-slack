@@ -2,7 +2,8 @@
 
 ## v0.3.0
 
-- Keep the three original read tools and the existing configuration defaults.
+- Select capability groups explicitly, including `read` for read-only use.
+  All instances verify the expected Slack workspace.
 - Add opt-in bot messaging: root posts, thread replies, editing/deleting own
   messages, scheduling and cancellation.
 - Add scoped conversation lookup, bounded history search, reactions, pins,

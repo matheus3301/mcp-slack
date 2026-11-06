@@ -39,17 +39,9 @@ func connect(t *testing.T, tools *Tools) *mcp.ClientSession {
 
 func testTools(t *testing.T) *Tools {
 	t.Helper()
-	api := newFakeAPI()
-	api.infoByID["C01234567"] = &slackclient.ChannelMeta{ID: "C01234567", Name: "general", IsPrivate: true, IsMember: true}
-	api.historyByID["C01234567"] = &slackclient.Page{
-		Messages:   []slackclient.Message{{TS: "1699999999.000100", User: "U1", Text: "hello"}},
-		NextCursor: "CURSOR_1",
-		HasMore:    true,
-	}
-	api.repliesByID["C01234567"] = &slackclient.Page{
-		Messages: []slackclient.Message{{TS: "1699999999.000100", ThreadTS: "1699999999.000100", Text: "root"}},
-	}
-	return &Tools{API: api, Allow: allowlist(t, "C01234567")}
+	f := newReadFixture(t)
+	f.respond("conversations.history", map[string]any{"ok": true, "messages": []any{fixtureMessage(fixtureTS)}, "has_more": true, "response_metadata": map[string]string{"next_cursor": "CURSOR_1"}})
+	return f.tools
 }
 
 func TestSmoke_ListToolsExactNamesAndAnnotations(t *testing.T) {
@@ -176,43 +168,32 @@ func TestSmoke_CallDeniedChannelIsToolError(t *testing.T) {
 }
 
 func TestSmoke_WildcardListAndMembershipGate(t *testing.T) {
-	t.Parallel()
-	api := newFakeAPI()
-	api.memberPages = []*slackclient.ChannelPage{{
-		Channels: []slackclient.ChannelMeta{{ID: "C01234567", Name: "general", IsMember: true}},
-	}}
-	api.infoByID["C01234567"] = &slackclient.ChannelMeta{ID: "C01234567", IsMember: true}
-	api.infoByID["C09999999"] = &slackclient.ChannelMeta{ID: "C09999999", IsMember: false}
-	api.historyByID["C01234567"] = &slackclient.Page{Messages: []slackclient.Message{{TS: "1.0"}}}
-
-	session := connect(t, &Tools{API: api, Allow: wildcardAllow(t)})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Wildcard channels_list returns member channels via the member-scoped API.
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: ToolChannelsList, Arguments: map[string]any{}})
-	if err != nil || res.IsError {
-		t.Fatalf("channels_list: err=%v result=%+v", err, res)
+	f := newReadFixture(t)
+	f.env["SLACK_READ_ALLOWED_CHANNELS"] = "*"
+	f.configure(t)
+	session := connect(t, f.tools)
+	res := callTool(t, session, ToolChannelsList, map[string]any{})
+	if res.IsError {
+		t.Fatalf("list: %v", res.Content)
 	}
 	var out ChannelsListOutput
 	decodeStructured(t, res.StructuredContent, &out)
-	if len(out.Channels) != 1 || out.Channels[0].ID != "C01234567" {
-		t.Errorf("wildcard list wrong: %+v", out.Channels)
+	if len(out.Channels) != 1 || out.Channels[0].ID != fixtureChannel {
+		t.Fatalf("channels=%+v", out)
 	}
-
-	// History on a member channel succeeds.
-	ok, err := session.CallTool(ctx, &mcp.CallToolParams{Name: ToolHistory, Arguments: map[string]any{"channel_id": "C01234567"}})
-	if err != nil || ok.IsError {
-		t.Fatalf("history(member): err=%v result=%+v", err, ok)
+	res = callTool(t, session, ToolHistory, map[string]any{"channel_id": fixtureChannel})
+	if res.IsError {
+		t.Fatalf("history: %v", res.Content)
 	}
-
-	// History on a non-member channel is a tool error, with no content read.
-	deny, err := session.CallTool(ctx, &mcp.CallToolParams{Name: ToolHistory, Arguments: map[string]any{"channel_id": "C09999999"}})
-	if err != nil {
-		t.Fatalf("transport error: %v", err)
+	ch := fixtureChannelInfo(fixtureChannel)
+	ch["is_member"] = false
+	f.respond("conversations.info", map[string]any{"ok": true, "channel": ch})
+	res = callTool(t, session, ToolHistory, map[string]any{"channel_id": fixtureChannel})
+	if !res.IsError || !strings.Contains(firstText(res.Content), slackclient.CodeNotInChannel) {
+		t.Fatalf("expected NOT_IN_CHANNEL: %v", res.Content)
 	}
-	if !deny.IsError || !strings.Contains(firstText(deny.Content), slackclient.CodeNotInChannel) {
-		t.Errorf("expected NOT_IN_CHANNEL tool error, got %+v", deny.Content)
+	if f.count("conversations.history") != 1 {
+		t.Fatal("read content after membership revoked")
 	}
 }
 

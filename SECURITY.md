@@ -26,7 +26,7 @@ other path is outside this server's policy.
 
 ## Operating the server
 
-Use the legacy read-only configuration unless a deployment needs additional
+Use the `read` capability unless a deployment needs additional
 capabilities. Keep the receipt directory private and persistent if writes need to
 survive restarts. Do not share the process environment or diagnostic dumps with
 untrusted clients. Keep write tools behind client approvals appropriate to your
